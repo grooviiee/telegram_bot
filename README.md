@@ -1,15 +1,12 @@
-This code refers following repository.. Thank you!
-https://github.com/koulanurag/ma-gym/tree/master/ma_gym/envs/switch
+## Objective
+7/1 일자 butler 서비스가 유료화가 되기 이전에 필요한 기능들을 빼온다.
 
 
-**This repository turned into telegram bot repo**
-
-belows are bot register info
-
-    Done! Congratulations on your new bot. You will find it at t.me/grooviiee_bot. You can now add a description, about section and profile picture for your bot, see /help for a list of commands. By the way, when you've finished creating your cool bot, ping our Bot Support if you want a better username for it. Just make sure the bot is fully operational before you do this.
+## TO DO List.
+1. 기업 검색
     
-    Use this token to access the HTTP API:
-    6381769851:AAE_7t57ut7jh0-pHZWTZz2f0T96BulTWmY
-    Keep your token secure and store it safely, it can be used by anyone to control your bot.
-    
-    For a description of the Bot API, see this page: https://core.telegram.org/bots/api
+    xml파일 가져온 후, 압축 풀어서 기업 코드를 찾아야 한다.
+
+2. 검색 시, 배당내역, 매출, 영업이익 값 구하기 (최근 5년 분기별, 연도별)
+
+3. 구한 값을 토대로 그래프 나타내기
