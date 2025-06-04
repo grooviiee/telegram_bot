@@ -1,103 +1,127 @@
-import Image from "next/image";
+// src/app/page.tsx
+"use client"; // 이 컴포넌트는 클라이언트 컴포넌트임을 명시합니다.
 
-export default function Home() {
+import React, { useState } from 'react';
+
+// 페이지 컴포넌트
+export default function HomePage(): JSX.Element {
+  const [apiKey, setApiKey] = useState<string>('');
+  const [message, setMessage] = useState<string>('');
+  const [loading, setLoading] = useState<boolean>(false);
+
+  const handleDownload = async (): Promise<void> => {
+    if (!apiKey) {
+      setMessage('API 키를 입력해주세요.');
+      return;
+    }
+
+    setLoading(true);
+    setMessage('다운로드 요청 중...');
+
+    try {
+      const flaskBackendUrl: string = `http://localhost:5000/download-corp-code?api_key=${apiKey}`;
+
+      const response: Response = await fetch(flaskBackendUrl);
+      const data: { status?: string; message?: string; error?: string; warning?: string } = await response.json();
+
+      if (response.ok) {
+        setMessage(`성공: ${data.message}`);
+      } else {
+        setMessage(`오류: ${data.message || data.error || data.warning || '알 수 없는 오류가 발생했습니다.'}`);
+      }
+    } catch (error: any) {
+      setMessage(`네트워크 오류: ${error.message}. Flask 서버가 실행 중인지 확인해주세요.`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+    <div style={styles.container}>
+      <h1 style={styles.heading}>OpenDART 기업개황정보 다운로더</h1>
+      <p style={styles.paragraph}>아래에 OpenDART API 키를 입력하고 다운로드 버튼을 클릭하세요.</p>
+      <input
+        type="text"
+        placeholder="OpenDART API 키"
+        value={apiKey}
+        onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
+        style={styles.input}
+        disabled={loading}
+      />
+      <button
+        onClick={handleDownload}
+        style={styles.button}
+        disabled={loading}
+      >
+        {loading ? '다운로드 중...' : 'ZIP 파일 다운로드 요청'}
+      </button>
+      {message && (
+        <p style={{
+          ...styles.message,
+          color: message.startsWith('오류') || message.startsWith('네트워크') ? '#dc3545' : '#28a745'
+        }}>
+          {message}
+        </p>
+      )}
     </div>
   );
 }
+
+interface Styles {
+  [key: string]: React.CSSProperties;
+}
+
+const styles: Styles = {
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '100vh',
+    padding: '20px',
+    fontFamily: 'Arial, sans-serif',
+    backgroundColor: '#f8f9fa',
+    color: '#343a40',
+  },
+  heading: {
+    fontSize: '2.5em',
+    color: '#0056b3',
+    marginBottom: '20px',
+    textAlign: 'center',
+  },
+  paragraph: {
+    fontSize: '1.1em',
+    marginBottom: '25px',
+    textAlign: 'center',
+    maxWidth: '600px',
+    lineHeight: '1.5',
+  },
+  input: {
+    width: '100%',
+    maxWidth: '400px',
+    padding: '12px 15px',
+    marginBottom: '20px',
+    borderRadius: '8px',
+    border: '1px solid #ced4da',
+    fontSize: '1em',
+    boxSizing: 'border-box',
+  },
+  button: {
+    padding: '12px 25px',
+    fontSize: '1.1em',
+    borderRadius: '8px',
+    border: 'none',
+    backgroundColor: '#007bff',
+    color: 'white',
+    cursor: 'pointer',
+    transition: 'background-color 0.3s ease',
+  },
+  message: {
+    marginTop: '25px',
+    padding: '10px 20px',
+    borderRadius: '5px',
+    backgroundColor: '#e9ecef',
+    border: '1px solid #dee2e6',
+    textAlign: 'center',
+  },
+};
