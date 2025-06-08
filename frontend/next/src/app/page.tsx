@@ -8,6 +8,7 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html>
+        <h1>---Page.tsx---</h1>
         <body>통통이 뚝딱 거리지 마라. 뚝딱! 뚝딱! 뚝딱!  </body>
      
     </html>
