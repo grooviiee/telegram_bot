@@ -68,7 +68,10 @@ def home():
     """
     기본 홈 페이지. 간단한 사용 안내를 제공합니다.
     """
-    return "OpenDART 기업개황정보 다운로더. '/download-corp-code?api_key=YOUR_API_KEY' 로 요청하세요."
+    return "<h1>OpenDART 기업개황정보 다운로더. '/download-corp-code?api_key=YOUR_API_KEY' 로 요청하세요.</h1>\
+            <h2>1. /download-corp-code/{api_key}</h2>\
+            <h2>2. get dividend data</h2\
+            "
 
 @app.route('/download-corp-code', methods=['GET'])
 def trigger_download():
@@ -98,5 +101,5 @@ if __name__ == '__main__':
     # Flask 애플리케이션을 실행합니다.
     # debug=True는 개발 환경에서 유용하며, 코드 변경 시 서버가 자동으로 재시작됩니다.
     # 실제 운영 환경에서는 debug=False로 설정하고, Gunicorn과 같은 WSGI 서버를 사용해야 합니다.
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5001)
 

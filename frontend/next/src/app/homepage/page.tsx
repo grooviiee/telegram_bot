@@ -13,14 +13,13 @@ export default function HomePage(): JSX.Element {
   const handleDownload = async (): Promise<void> => {
     if (!apiKey) {
       setMessage('API 키를 입력해주세요.');
-      return;
     }
 
     setLoading(true);
     setMessage('다운로드 요청 중...');
 
     try {
-      const flaskBackendUrl: string = `http://localhost:5000/download-corp-code?api_key=${apiKey}`;
+      const flaskBackendUrl: string = `http://localhost:5001/download-corp-code?api_key=${apiKey}`;
 
       const response: Response = await fetch(flaskBackendUrl);
       const data: { status?: string; message?: string; error?: string; warning?: string } = await response.json();
@@ -58,6 +57,13 @@ export default function HomePage(): JSX.Element {
         style={styles.input}
         disabled={loading}
       />
+      <button
+        onClick={handleDownload}
+        style={styles.button}
+        disabled={loading}
+      >
+        {loading ? '확인 중...' : 'API 확인 시작'}
+      </button>
       <button
         onClick={handleDownload}
         style={styles.button}
