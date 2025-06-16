@@ -1,14 +1,24 @@
 // src/app/page.tsx
 "use client"; // 이 컴포넌트는 클라이언트 컴포넌트임을 명시합니다.
 
-import React, { useState } from 'react';
+import React, { JSX, useState } from 'react';
 import Link from 'next/link'
+import { useRouter } from 'next/router';
+
+
 
 // 페이지 컴포넌트
 export default function HomePage(): JSX.Element {
   const [apiKey, setApiKey] = useState<string>('');
   const [message, setMessage] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
+  const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
+
+
+  const handleGoToNextPage = (): void => {
+    const router = useRouter();
+    router.push('/dashboard'); // 이동하려는 페이지 경로로 변경하세요.
+  };
 
   const handleDownload = async (): Promise<void> => {
     if (!apiKey) {
@@ -18,22 +28,23 @@ export default function HomePage(): JSX.Element {
     setLoading(true);
     setMessage('다운로드 요청 중...');
 
-    try {
+    // try {
       const flaskBackendUrl: string = `http://localhost:5001/download-corp-code?api_key=${apiKey}`;
-
-      const response: Response = await fetch(flaskBackendUrl);
+      setMessage(`다운로드 요청 중... (URL: ${flaskBackendUrl})`);
+      const response: Response = await fetch(flaskBackendUrl, {method: 'GET'});
       const data: { status?: string; message?: string; error?: string; warning?: string } = await response.json();
-
+      console.log('Full Response Object:', response); // 전체 Response 객체 출력
+      console.log('Parsed Data (JSON):', data);     // 파싱된 JSON 데이터 출력
       if (response.ok) {
         setMessage(`성공: ${data.message}`);
       } else {
         setMessage(`오류: ${data.message || data.error || data.warning || '알 수 없는 오류가 발생했습니다.'}`);
       }
-    } catch (error: any) {
-      setMessage(`네트워크 오류: ${error.message}. Flask 서버가 실행 중인지 확인해주세요.`);
-    } finally {
-      setLoading(false);
-    }
+    // } catch (error: any) {
+    //   setMessage(`네트워크 오류: ${error.message}. Flask 서버가 실행 중인지 확인해주세요.`);
+    // } finally {
+    //   setLoading(false);
+    // }
   };
 
   return (
@@ -78,6 +89,23 @@ export default function HomePage(): JSX.Element {
         }}>
           {message}
         </p>
+      )}
+      {/* 다운로드가 성공했을 때만 이 버튼을 렌더링합니다 */}
+            {downloadSuccess && (
+        <button
+          onClick={handleGoToNextPage}
+          style={{
+            marginTop: '20px',
+            padding: '10px 20px',
+            backgroundColor: '#28a745',
+            color: 'white',
+            border: 'none',
+            borderRadius: '5px',
+            cursor: 'pointer',
+          }}
+        >
+          다음 페이지로 이동
+        </button>
       )}
     </div>
   );
