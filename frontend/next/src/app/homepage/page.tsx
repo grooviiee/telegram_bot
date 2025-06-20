@@ -25,9 +25,8 @@ export default function HomePage(): JSX.Element {
       setMessage('API 키를 입력해주세요.');
     }
     setLoading(true);
-
-    // try {
-      const flaskBackendUrl: string = `http://localhost:5001/download-corp-code?api_key=${apiKey}`;
+    const flaskBackendUrl: string = `http://localhost:5002/download-corp-code?api_key=12345`;
+    try {
       setMessage(`다운로드 요청 중... (URL: ${flaskBackendUrl})`);
       const response: Response = await fetch(flaskBackendUrl, {method: 'GET'});
       const data: { status?: string; message?: string; error?: string; warning?: string } = await response.json();
@@ -38,11 +37,15 @@ export default function HomePage(): JSX.Element {
       } else {
         setMessage(`오류: ${data.message || data.error || data.warning || '알 수 없는 오류가 발생했습니다.'}`);
       }
-    // } catch (error: any) {
-    //   setMessage(`네트워크 오류: ${error.message}. Flask 서버가 실행 중인지 확인해주세요.`);
-    // } finally {
-    //   setLoading(false);
-    // }
+    } catch (error: any) {
+      // 네트워크 오류 또는 JSON 파싱 오류 등 실제 예외가 발생했을 때 처리
+      console.log('error:', error.message)
+      setMessage(`네트워크 오류: ${error.message}.\nFlask 서버가 실행 중인지 확인해주세요. (요청 URL: ${flaskBackendUrl})`);
+      setDownloadSuccess(false); // 오류 발생 시 downloadSuccess 상태 초기화
+    } finally {
+      // 요청이 성공하든 실패하든, 로딩 상태는 항상 비활성화
+      setLoading(false);
+    }
   };
 
   return (
