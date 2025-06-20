@@ -3,9 +3,7 @@
 
 import React, { JSX, useState } from 'react';
 import Link from 'next/link'
-import { useRouter } from 'next/router';
-
-
+import { useRouter } from 'next/navigation';
 
 // 페이지 컴포넌트
 export default function HomePage(): JSX.Element {
@@ -13,11 +11,10 @@ export default function HomePage(): JSX.Element {
   const [message, setMessage] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
-
+  const router = useRouter();
 
   const handleGoToNextPage = (): void => {
-    const router = useRouter();
-    router.push('/dashboard'); // 이동하려는 페이지 경로로 변경하세요.
+    router.push('/dividend'); // 이동하려는 페이지 경로로 변경하세요.
   };
 
   const handleDownload = async (): Promise<void> => {
@@ -33,9 +30,8 @@ export default function HomePage(): JSX.Element {
       console.log('Full Response Object:', response); // 전체 Response 객체 출력
       console.log('Parsed Data (JSON):', data);     // 파싱된 JSON 데이터 출력
       if (response.ok) {
-        setMessage(`성공: ${data.message}`);
-      } else {
-        setMessage(`오류: ${data.message || data.error || data.warning || '알 수 없는 오류가 발생했습니다.'}`);
+        setMessage(`성공: ${data.message} (3초 후 홈으로 이동합니다...)`); // 메시지에 이동 예정 알림
+        setDownloadSuccess(true); // 다운로드 성공 상태로 변경
       }
     } catch (error: any) {
       // 네트워크 오류 또는 JSON 파싱 오류 등 실제 예외가 발생했을 때 처리
@@ -93,20 +89,22 @@ export default function HomePage(): JSX.Element {
       )}
       {/* 다운로드가 성공했을 때만 이 버튼을 렌더링합니다 */}
             {downloadSuccess && (
-        <button
-          onClick={handleGoToNextPage}
-          style={{
-            marginTop: '20px',
-            padding: '10px 20px',
-            backgroundColor: '#28a745',
-            color: 'white',
-            border: 'none',
-            borderRadius: '5px',
-            cursor: 'pointer',
-          }}
-        >
-          다음 페이지로 이동
-        </button>
+        <Link href="/dividend" passHref> {/* /dividend 경로로 이동하는 Link 컴포넌트 */}
+          <button
+            onClick={handleGoToNextPage}
+            style={{
+              marginTop: '20px',
+              padding: '10px 20px',
+              backgroundColor: '#28a745',
+              color: 'white',
+              border: 'none',
+              borderRadius: '5px',
+              cursor: 'pointer',
+            }}
+          >
+            다음 페이지로 이동
+          </button>
+        </Link>
       )}
     </div>
   );

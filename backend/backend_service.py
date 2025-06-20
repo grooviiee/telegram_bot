@@ -5,6 +5,7 @@ from flask_cors import CORS
 import datetime # Add this import for timestamp
 
 app = Flask(__name__)
+CORS(app)
 
 # 이 함수는 OpenDART 기업개황정보 ZIP 파일을 다운로드하여 저장합니다.
 # Flask 애플리케이션 내에서 사용될 것입니다.
@@ -26,7 +27,7 @@ def download_corp_code_zip_internal(api_key: str, save_directory: str = "downloa
 
     # 요청 인자 (API 인증키)
     params = {
-        "crtfc_key": api_key
+        "crtfc_key": "aaf2ed404abd73c00ab27a6ba80476131e6f9a73"
     }
 
     # 다운로드 디렉토리가 없으면 생성
@@ -45,9 +46,9 @@ def download_corp_code_zip_internal(api_key: str, save_directory: str = "downloa
         response.raise_for_status()  # HTTP 오류가 발생하면 예외를 발생시킵니다.
 
         if response.status_code == 200:
-            with open(full_save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
+            # with open(full_save_path, 'wb') as f:
+            #     for chunk in response.iter_content(chunk_size=8192):
+            #         f.write(chunk)
             print(f"ZIP 파일이 성공적으로 다운로드되어 '{full_save_path}'에 저장되었습니다.")
             return full_save_path, None
         else:
@@ -102,5 +103,5 @@ if __name__ == '__main__':
     # Flask 애플리케이션을 실행합니다.
     # debug=True는 개발 환경에서 유용하며, 코드 변경 시 서버가 자동으로 재시작됩니다.
     # 실제 운영 환경에서는 debug=False로 설정하고, Gunicorn과 같은 WSGI 서버를 사용해야 합니다.
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    app.run(debug=True, host='0.0.0.0', port=5002)
 
