@@ -9,7 +9,7 @@ import { useRouter } from 'next/router';
 
 // 페이지 컴포넌트
 export default function HomePage(): JSX.Element {
-  const [apiKey, setApiKey] = useState<string>('');
+  const [apiKey, setApiKey] = useState<string>('aaf2ed404abd73c00ab27a6ba80476131e6f9a73');
   const [message, setMessage] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
@@ -24,9 +24,7 @@ export default function HomePage(): JSX.Element {
     if (!apiKey) {
       setMessage('API 키를 입력해주세요.');
     }
-
     setLoading(true);
-    setMessage('다운로드 요청 중...');
 
     // try {
       const flaskBackendUrl: string = `http://localhost:5001/download-corp-code?api_key=${apiKey}`;

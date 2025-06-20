@@ -1,6 +1,7 @@
 import requests
 import os
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import datetime # Add this import for timestamp
 
 app = Flask(__name__)
