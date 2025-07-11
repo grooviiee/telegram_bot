@@ -1,9 +1,24 @@
 // src/app/page.tsx
 "use client"; // 이 컴포넌트는 클라이언트 컴포넌트임을 명시합니다.
 
+// lib/auth.ts (또는 유사한 유틸리티 파일)
+export const saveLoginStatus = (isLoggedIn: boolean) => {
+  if (typeof window !== 'undefined') { // 클라이언트 사이드에서만 실행되도록 확인
+    localStorage.setItem('is_login', String(isLoggedIn));
+  }
+};
+
+export const getLoginStatus = (): boolean => {
+  if (typeof window !== 'undefined') {
+    return localStorage.getItem('is_login') === 'true';
+  }
+  return false; // 서버 사이드 또는 초기 렌더링 시에는 기본값
+};
+
 import React, { JSX, useState } from 'react';
 import Link from 'next/link'
 import { useRouter } from 'next/navigation';
+import { getLoginStatus, saveLoginStatus } from '../lib/auth';
 
 // 페이지 컴포넌트
 export default function HomePage(): JSX.Element {
