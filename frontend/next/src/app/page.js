@@ -1,12 +1,14 @@
 
-import { Search, Bell, Settings, User, Menu, ChevronRight } from 'lucide-react'; // 아이콘 임포트 (ChevronRight 추가)
 import { DashboardCard } from '@/component/DashboardCard';
-// import { Header } from '@/app/header';
 
 // 메인 App 컴포넌트
-export default function App ({ children }) {
-
-  return;
-
-    
+export default function App () {
+  return (
+    <div>
+      <h1 className="text-2xl font-bold mb-4">Dashboard</h1>
+      <DashboardCard title="Welcome">
+        <p>Hello World!</p>
+      </DashboardCard>
+    </div>
+  );
 };
