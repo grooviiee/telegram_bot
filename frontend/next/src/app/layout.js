@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import "./globals.css";
-import { Control } from './Control';
+import { InteractiveLayout } from './InteractiveLayout'; // Changed
 
 export const metadata = {
   title: "Butler.works",
@@ -16,12 +16,12 @@ export default async function RootLayout({ children }) {
   return (
     <html>
       <body>
-        <Control />
+        <InteractiveLayout /> {/* Changed */}
         <nav className="p-4">
           <div className="flex items-center space-x-2 bg-gray-100 p-2 rounded-full">
             {topics.map(topic => (
               <Link href={`/${topic.id}`} key={topic.id} className="px-4 py-2 text-sm font-medium text-gray-700 rounded-full hover:bg-white hover:text-black">
-                {topic.id}
+                {topic.title} {/* Fixed */}
               </Link> 
             ))}
           </div>
