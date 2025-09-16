@@ -24,3 +24,29 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.layout-container {
+  display: flex;
+}
+
+.sidebar {
+  width: 280px;
+  padding: 20px;
+  background-color: #f7f7f7;
+  border-right: 1px solid #e0e0e0;
+}
+
+.main-content {
+  flex-grow: 1;
+  padding: 20px;
+}
+
+@media (max-width: 768px) {
+  .layout-container {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+  }
+}

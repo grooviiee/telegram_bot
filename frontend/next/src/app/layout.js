@@ -10,26 +10,25 @@ export const metadata = {
 var date_info = "12345"
 
 export default async function RootLayout({ children }) {
-  const resp = await fetch(`http://localhost:9999/topics`, {next: {revalidate: 0} });
-  const topics = await resp.json()
+  let menu_items = [];
+  let error = null;
+  try {
+    const resp = await fetch(`http://localhost:9999/menu`, {next: {revalidate: 0} });
+    if (!resp.ok) {
+      throw new Error('Failed to fetch menu_items');
+    }
+    menu_items = await resp.json();
+  } catch (e) {
+    error = e.message;
+    console.error(e);
+  }
 
   return (
     <html>
       <body>
-        <InteractiveLayout /> {/* Changed */}
-        <nav className="p-4">
-          <div className="flex items-center space-x-2 bg-gray-100 p-2 rounded-full">
-            {topics.map(topic => (
-              <Link href={`/${topic.id}`} key={topic.id} className="px-4 py-2 text-sm font-medium text-gray-700 rounded-full hover:bg-white hover:text-black">
-                {topic.title} {/* Fixed */}
-              </Link> 
-            ))}
-          </div>
-        </nav>
-
-        <h1>------Start of Children (page.js) ({date_info})-----</h1>
-        {children}
-        <h1>------End of Children-----</h1>
+        <div className="layout-container">
+          <InteractiveLayout menu_items={menu_items} error={error} />
+        </div>
       </body>
     </html>
   )

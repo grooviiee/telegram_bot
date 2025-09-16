@@ -1,19 +1,29 @@
 {
-    "topics": [
+    "menu": [
         {
-            "id": "homepage",
-            "title": "json db 1",
-            "author": "typicode"
+            "id": "0",
+            "title": "요약",
+            "url": "home"
         },
         {
-            "id": "dividend",
-            "title": "json db 2",
-            "author": "typicode"
+            "id": "1",
+            "title": "사업정보",
+            "url": "business_info"
         },
         {
-            "id": "create",
-            "title": "json db 3",
-            "author": "typicode"
+            "id": "2",
+            "title": "재무정보",
+            "url": "fiscal_info"
+        },
+        {
+            "id": "3",
+            "title": "펀더멘탈",
+            "url": "fundamental"
+        },
+        {
+            "id": "4",
+            "title": "벨류에이션",
+            "url": "valuation"
         }
     ],
     "ports": [
