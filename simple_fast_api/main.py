@@ -14,7 +14,7 @@ import re
 import json
 import aiohttp
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -122,6 +122,70 @@ def download_reports_logic(company_name: str, corp_code: str):
 
 # --- Gemini API 연동 및 분석 함수 (신규/수정) ---
 
+def extract_quarter_from_filename(filename: str) -> tuple[str, str] | None:
+    """
+    파일명에서 연도와 분기 정보를 추출합니다.
+
+    파일명 형식: {company}_{report_name}_{YYYYMMDD}.zip
+
+    반환: (year, quarter) 또는 None
+    예: ("2024", "Q1"), ("2024", "Q4")
+
+    분기 매핑:
+    - 1분기보고서 → Q1
+    - 반기보고서 → Q2
+    - 3분기보고서 → Q3
+    - 사업보고서 → Q4
+    """
+    try:
+        # 파일명에서 .zip 제거
+        base_name = filename.replace('.zip', '')
+
+        # 마지막 언더스코어로 날짜 분리
+        parts = base_name.rsplit('_', 1)
+        if len(parts) != 2:
+            return None
+
+        date_str = parts[1]  # YYYYMMDD
+        if len(date_str) != 8 or not date_str.isdigit():
+            return None
+
+        year = date_str[:4]  # YYYY
+
+        # 보고서명 부분 추출 (회사명 제외)
+        report_part = parts[0]  # company_report_name...
+        report_name_parts = report_part.split('_')
+
+        # 보고서명은 언더스코어로 연결되어 있음
+        # report_name_parts = ['company', 'report', 'name', ...]
+        # 회사명은 첫 부분이고, 보고서명은 나머지
+        if len(report_name_parts) < 2:
+            return None
+
+        # 회사명 다음부터가 보고서명
+        report_name = '_'.join(report_name_parts[1:])
+
+        # 분기 판정
+        quarter = None
+        if '1분기' in report_name:
+            quarter = 'Q1'
+        elif '반기' in report_name:
+            quarter = 'Q2'
+        elif '3분기' in report_name:
+            quarter = 'Q3'
+        elif '사업보고서' in report_name:
+            quarter = 'Q4'
+
+        if quarter:
+            return (year, quarter)
+        else:
+            return None
+
+    except Exception as e:
+        print(f"파일명 파싱 오류 ({filename}): {e}")
+        return None
+
+
 def extract_dividend_section(zip_path: str) -> str | None:
     """보고서 zip 파일에서 '배당에 관한 사항' 섹션의 텍스트만 추출합니다."""
     try:
@@ -228,10 +292,78 @@ async def trigger_download(request: CompanyRequest, background_tasks: Background
         raise e
 
 
+@app.get("/analyze-dividends-json/{company_name}")
+async def analyze_dividends_json(company_name: str):
+    """
+    다운로드된 보고서를 Gemini API로 분석하여 분기별 배당금 데이터를 JSON으로 반환합니다.
+    """
+    print(f"'{company_name}'의 분기별 배당금 분석을 시작합니다 (Gemini API 사용)...")
+    report_files = glob.glob(os.path.join(REPORTS_DIR, f"{company_name}_*.zip"))
+    if not report_files:
+        raise HTTPException(status_code=404, detail=f"'{company_name}'의 다운로드된 보고서가 없습니다. 먼저 다운로드를 실행해주세요.")
+
+    dividend_data = []
+    for file_path in report_files:
+        filename = os.path.basename(file_path)
+
+        # 1. 파일명에서 분기 정보 추출
+        result = extract_quarter_from_filename(filename)
+        if not result:
+            print(f" -> '{filename}'에서 분기 정보를 추출하지 못했습니다.")
+            continue
+
+        year, quarter = result
+
+        # 2. 보고서에서 배당 관련 섹션 텍스트 추출
+        dividend_section_text = extract_dividend_section(file_path)
+        if not dividend_section_text:
+            print(f" -> '{filename}'에서 배당 섹션을 찾지 못했습니다.")
+            continue
+
+        # 3. Gemini API로 배당금 정보 요청
+        print(f" -> '{filename}' 분석을 위해 Gemini API 호출 ({year}-{quarter})...")
+        dividend_amount = await get_dividend_from_gemini(dividend_section_text)
+
+        # 4. 중복 확인 후 데이터 수집
+        if dividend_amount is not None and dividend_amount > 0:
+            # 같은 분기의 중복 데이터가 있는지 확인
+            existing = next(
+                (d for d in dividend_data
+                 if d['year'] == int(year) and d['quarter'] == quarter),
+                None
+            )
+
+            if not existing:
+                dividend_data.append({
+                    'year': int(year),
+                    'quarter': quarter,
+                    'dividend': dividend_amount,
+                    'report_date': filename.split('_')[-1].replace('.zip', '')
+                })
+                print(f" -> Gemini 분석 결과: {dividend_amount}원 ({year}-{quarter})")
+            else:
+                print(f" -> {year}-{quarter} 분기는 이미 데이터가 있어 중복 스킵")
+        else:
+            print(f" -> Gemini 분석 결과: 배당금 정보 없음 또는 0원 ({year}-{quarter})")
+
+    if not dividend_data:
+        raise HTTPException(status_code=404, detail=f"'{company_name}'의 보고서에서 유효한 배당금 정보를 찾을 수 없습니다.")
+
+    # 5. 데이터 정렬 (연도, 분기 순서)
+    dividend_data.sort(key=lambda x: (x['year'],
+                                      ['Q1', 'Q2', 'Q3', 'Q4'].index(x['quarter'])))
+
+    # 6. JSON 응답 반환
+    return JSONResponse(content={
+        'company_name': company_name,
+        'dividend_data': dividend_data
+    })
+
+
 @app.get("/analyze-dividends/{company_name}", response_class=FileResponse)
 async def analyze_dividends_with_gemini_endpoint(company_name: str):
     """
-    다운로드된 보고서를 Gemini API로 분석하여 배당금 추이 그래프를 반환합니다.
+    [기존 호환성 유지] 다운로드된 보고서를 Gemini API로 분석하여 배당금 추이 그래프를 반환합니다.
     """
     print(f"'{company_name}'의 배당금 분석을 시작합니다 (Gemini API 사용)...")
     report_files = glob.glob(os.path.join(REPORTS_DIR, f"{company_name}_*.zip"))
@@ -240,19 +372,28 @@ async def analyze_dividends_with_gemini_endpoint(company_name: str):
 
     dividend_data = []
     for file_path in report_files:
+        filename = os.path.basename(file_path)
+
+        # 파일명에서 분기 정보 추출 (호환성 유지)
+        result = extract_quarter_from_filename(filename)
+        if result:
+            year, quarter = result
+            label = f"{year}-{quarter}"
+        else:
+            label = filename.split('_')[-1].replace('.zip', '')
+
         # 보고서에서 배당 관련 섹션 텍스트 추출
         dividend_section_text = extract_dividend_section(file_path)
         if not dividend_section_text:
-            print(f" -> '{os.path.basename(file_path)}'에서 배당 섹션을 찾지 못했습니다.")
+            print(f" -> '{filename}'에서 배당 섹션을 찾지 못했습니다.")
             continue
 
         # Gemini API로 배당금 정보 요청
-        print(f" -> '{os.path.basename(file_path)}' 분석을 위해 Gemini API 호출...")
+        print(f" -> '{filename}' 분석을 위해 Gemini API 호출...")
         dividend_amount = await get_dividend_from_gemini(dividend_section_text)
 
         if dividend_amount is not None and dividend_amount > 0:
-            report_date_str = os.path.basename(file_path).split('_')[-1].replace('.zip', '')
-            dividend_data.append((report_date_str, dividend_amount))
+            dividend_data.append((label, dividend_amount))
             print(f" -> Gemini 분석 결과: {dividend_amount}원")
         else:
             print(" -> Gemini 분석 결과: 배당금 정보 없음 또는 0원")
