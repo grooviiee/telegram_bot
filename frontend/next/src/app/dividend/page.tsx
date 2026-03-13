@@ -42,6 +42,18 @@ interface ChartDataItem {
   }[];
 }
 
+// 인기 기업 목록
+const POPULAR_COMPANIES = [
+  '삼성전자',
+  'SK하이닉스',
+  'LG전자',
+  'NAVER',
+  'Kakao',
+  '현대자동차',
+  'Coupang',
+  'HD현대',
+];
+
 export default function DividendChartPage(): JSX.Element {
   const [companyName, setCompanyName] = useState<string>('삼성전자'); // 회사명 입력 필드
   const [message, setMessage] = useState<string>('');
@@ -171,6 +183,29 @@ export default function DividendChartPage(): JSX.Element {
         >
           {loading ? '조회 중...' : '조회'}
         </button>
+      </div>
+
+      {/* 인기 기업 버튼 */}
+      <div style={styles.popularCompanies}>
+        <p style={styles.popularLabel}>인기 기업:</p>
+        <div style={styles.buttonGroup}>
+          {POPULAR_COMPANIES.map((company) => (
+            <button
+              key={company}
+              onClick={() => {
+                setCompanyName(company);
+              }}
+              style={{
+                ...styles.companyButton,
+                backgroundColor: companyName === company ? '#007bff' : '#e9ecef',
+                color: companyName === company ? 'white' : '#343a40',
+              }}
+              disabled={loading}
+            >
+              {company}
+            </button>
+          ))}
+        </div>
       </div>
 
       {message && (
@@ -329,5 +364,32 @@ const styles: Styles = {
     padding: '12px',
     textAlign: 'center' as 'center',
     borderRight: '1px solid #dee2e6',
+  },
+  popularCompanies: {
+    marginTop: '30px',
+    padding: '20px',
+    backgroundColor: '#f8f9fa',
+    borderRadius: '8px',
+    maxWidth: '800px',
+  },
+  popularLabel: {
+    fontSize: '0.95em',
+    fontWeight: 'bold' as 'bold',
+    marginBottom: '12px',
+    color: '#495057',
+  },
+  buttonGroup: {
+    display: 'flex',
+    flexWrap: 'wrap' as 'wrap',
+    gap: '8px',
+  },
+  companyButton: {
+    padding: '8px 16px',
+    borderRadius: '6px',
+    border: 'none',
+    fontSize: '0.9em',
+    cursor: 'pointer',
+    transition: 'all 0.3s ease',
+    fontWeight: '500',
   }
 };
