@@ -1,13 +1,10 @@
-import Link from 'next/link'
 import "./globals.css";
-import { InteractiveLayout } from './InteractiveLayout'; // Changed
+import { InteractiveLayout } from './InteractiveLayout';
 
 export const metadata = {
   title: "Butler.works",
   description: 'This is duplicated version of butler.works',
-} 
-
-var date_info = "12345"
+}
 
 export default async function RootLayout({ children }) {
   let menu_items = [];

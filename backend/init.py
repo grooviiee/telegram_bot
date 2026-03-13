@@ -1,32 +1,39 @@
 import asyncio
-import telegram
-from telegram.ext import *
-
-
-MY_TOKEN = '6381769851:AAE_7t57ut7jh0-pHZWTZz2f0T96BulTWmY'
-CHAT_ID = 'grooviiee_bot'
-
-async def send_text(bot, text):
-    await bot.send_message(CHAT_ID, text)
-    
-msg = 'new is start yes'
-
-bot = telegram.Bot(token=MY_TOKEN)
-asyncio.run(send_text(bot, msg))
-
-
-import asyncio
+import os
 import telegram
 import json
 import requests
+from telegram.ext import *
+from dotenv import load_dotenv
 
-MY_TOKEN = '6381769851:AAE_7t57ut7jh0-pHZWTZz2f0T96BulTWmY'
-CHAT_ID = '798391124'
+# Load environment variables from .env file
+load_dotenv()
+
+# Get credentials from environment variables
+MY_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+
+if not MY_TOKEN or not CHAT_ID:
+    raise ValueError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set in .env file")
+
+
+async def send_text(bot, text):
+    """Send message using async method"""
+    await bot.send_message(CHAT_ID, text)
 
 
 def send_message(message):
-  url=f'https://api.telegram.org/bot{MY_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={message}'
-  response=json.loads(requests.get(url).text)
-  print(response)
+    """Send message using HTTP API"""
+    url = f'https://api.telegram.org/bot{MY_TOKEN}/sendMessage?chat_id={CHAT_ID}&text={message}'
+    response = json.loads(requests.get(url).text)
+    print(response)
 
-send_message('반가워요')
+
+if __name__ == '__main__':
+    # Example: Send async message
+    msg = 'new is start yes'
+    bot = telegram.Bot(token=MY_TOKEN)
+    asyncio.run(send_text(bot, msg))
+
+    # Example: Send HTTP message
+    send_message('반가워요')
