@@ -251,6 +251,117 @@ async def get_dividend_from_gemini(text_content: str) -> int | None:
         return None
 
 
+async def fetch_financial_data_from_dart(corp_code: str, metric_type: str, years: int = 5) -> list | None:
+    """
+    DART API에서 분기별 재무 정보(매출액, 영업이익, 순이익)를 조회합니다.
+
+    Args:
+        corp_code: 회사 코드 (8자리)
+        metric_type: 'revenue', 'operating_income', 'net_income'
+        years: 조회 연도 수 (기본값 5년)
+
+    Returns:
+        List of financial data with year, quarter, value, unit
+    """
+    financial_data = []
+    base_url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
+
+    # 메트릭별 DART API 필드명 매핑
+    metric_mapping = {
+        'revenue': '매출액',
+        'operating_income': '영업이익',
+        'net_income': '당기순이익'
+    }
+
+    # 보고서 코드 매핑 (분기별)
+    report_codes = {
+        'Q1': '11012',  # 1분기보고서
+        'Q2': '11013',  # 반기보고서
+        'Q3': '11012',  # 3분기보고서
+        'Q4': '11011'   # 사업보고서
+    }
+
+    current_year = datetime.now().year
+
+    try:
+        # 지난 5년간 각 분기의 재무 정보 조회
+        for year in range(current_year, current_year - years, -1):
+            for quarter, reprt_code in report_codes.items():
+                params = {
+                    'crtfc_key': DART_API_KEY,
+                    'corp_code': corp_code,
+                    'bsns_year': year,
+                    'reprt_code': reprt_code,
+                    'fs_div': 'OFS'  # 단일 회계
+                }
+
+                response = requests.get(base_url, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get('list'):
+                    for item in data['list']:
+                        # 해당 메트릭 찾기
+                        if item.get('account_nm') == metric_mapping.get(metric_type):
+                            try:
+                                # 분기 데이터 추출 (최근 데이터가 first여야 함)
+                                amount = int(item.get('thstrm_amount', 0))
+                                financial_data.append({
+                                    'year': year,
+                                    'quarter': quarter,
+                                    'value': amount,
+                                    'unit': 'KRW'
+                                })
+                                break  # 해당 분기의 메트릭을 찾으면 중단
+                            except (ValueError, TypeError):
+                                continue
+
+        # 데이터 정렬 (연도, 분기 순서)
+        quarter_order = {'Q1': 1, 'Q2': 2, 'Q3': 3, 'Q4': 4}
+        financial_data.sort(key=lambda x: (x['year'], quarter_order[x['quarter']]))
+
+        return financial_data if financial_data else None
+
+    except requests.exceptions.RequestException as e:
+        print(f"DART API 재무 데이터 조회 오류: {e}")
+        return None
+
+
+async def aggregate_quarterly_metrics(company_name: str, metric_types: list = None) -> dict:
+    """
+    회사의 분기별 재무 메트릭을 모두 수집하여 반환합니다.
+
+    Args:
+        company_name: 회사명
+        metric_types: 조회할 메트릭 리스트 (기본값: ['revenue', 'operating_income', 'net_income'])
+
+    Returns:
+        Dict containing company_name and metrics
+    """
+    if metric_types is None:
+        metric_types = ['revenue', 'operating_income', 'net_income']
+
+    try:
+        corp_code = get_corp_code(company_name)
+        metrics = {}
+
+        for metric_type in metric_types:
+            metric_data = await fetch_financial_data_from_dart(corp_code, metric_type)
+            if metric_data:
+                metrics[metric_type] = metric_data
+
+        return {
+            'company_name': company_name,
+            'metrics': metrics
+        }
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"재무 메트릭 수집 오류: {e}")
+        raise HTTPException(status_code=500, detail=f"재무 데이터 수집 중 오류 발생: {e}")
+
+
 def create_dividend_graph(dividend_data: list, company_name: str) -> str | None:
     """추출된 배당금 데이터로 그래프를 생성하고 이미지 파일로 저장합니다."""
     # 이 함수는 기존 코드와 동일하게 유지됩니다.
@@ -406,6 +517,45 @@ async def analyze_dividends_with_gemini_endpoint(company_name: str):
         return FileResponse(graph_path, media_type='image/png')
     else:
         raise HTTPException(status_code=500, detail="그래프 파일 생성에 실패했습니다.")
+
+
+@app.get("/api/financial-metrics/{company_name}")
+async def get_financial_metrics(company_name: str):
+    """
+    회사의 분기별 재무 메트릭을 조회합니다.
+    - 매출액 (Revenue)
+    - 영업이익 (Operating Income)
+    - 순이익 (Net Income)
+    """
+    try:
+        metrics = await aggregate_quarterly_metrics(company_name)
+        return JSONResponse(content=metrics)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"재무 데이터 조회 실패: {e}")
+
+
+@app.get("/api/financial-metrics/{company_name}/{metric_type}")
+async def get_single_metric(company_name: str, metric_type: str):
+    """
+    특정 재무 메트릭만 조회합니다.
+    metric_type: 'revenue', 'operating_income', 'net_income'
+    """
+    valid_metrics = ['revenue', 'operating_income', 'net_income']
+    if metric_type not in valid_metrics:
+        raise HTTPException(
+            status_code=400,
+            detail=f"유효하지 않은 메트릭 타입입니다. 가능한 값: {', '.join(valid_metrics)}"
+        )
+
+    try:
+        metrics = await aggregate_quarterly_metrics(company_name, metric_types=[metric_type])
+        return JSONResponse(content=metrics)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"재무 데이터 조회 실패: {e}")
 
 
 @app.get("/", include_in_schema=False)

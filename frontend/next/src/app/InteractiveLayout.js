@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { Sidebar } from './Sidebar';
 import CreatePage from './create/page';
 import DividendPage from './dividend/page';
+import FinancialPage from './financial/page';
 import HomePage from './page';
 import Link from 'next/link';
 import { Header } from '@/components/header/Header';
@@ -39,6 +40,8 @@ export function InteractiveLayout({ menu_items, error }) {
         return <CreatePage />;
       case 'dividend':
         return <DividendPage />;
+      case 'financial':
+        return <FinancialPage />;
       default:
         return <HomePage />;
     }

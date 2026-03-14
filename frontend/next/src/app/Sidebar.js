@@ -11,6 +11,7 @@ export function Sidebar({ setActivePage }) {
         <button onClick={() => setActivePage('home')} className="w-full text-left px-4 py-2 text-sm font-medium text-gray-700 rounded-md hover:bg-gray-200">Home</button>
         <button onClick={() => setActivePage('create')} className="w-full text-left px-4 py-2 text-sm font-medium text-gray-700 rounded-md hover:bg-gray-200">Create</button>
         <button onClick={() => setActivePage('dividend')} className="w-full text-left px-4 py-2 text-sm font-medium text-gray-700 rounded-md hover:bg-gray-200">Dividend</button>
+        <button onClick={() => setActivePage('financial')} className="w-full text-left px-4 py-2 text-sm font-medium text-gray-700 rounded-md hover:bg-gray-200">Financial</button>
       </nav>
     </div>
   );
