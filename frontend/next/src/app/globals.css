@@ -25,28 +25,30 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-.layout-container {
-  display: flex;
+/* DART 보고서 테이블 스타일 */
+.dart-table-wrapper table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.8125rem;
+  color: #374151;
 }
 
-.sidebar {
-  width: 280px;
-  padding: 20px;
-  background-color: #f7f7f7;
-  border-right: 1px solid #e0e0e0;
+.dart-table-wrapper th,
+.dart-table-wrapper td {
+  border: 1px solid #d1d5db;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
-.main-content {
-  flex-grow: 1;
-  padding: 20px;
+.dart-table-wrapper th {
+  background-color: #f3f4f6;
+  font-weight: 600;
+  color: #1f2937;
 }
 
-@media (max-width: 768px) {
-  .layout-container {
-    flex-direction: column;
-  }
-
-  .sidebar {
-    width: 100%;
-  }
+.dart-table-wrapper tr:nth-child(even) td {
+  background-color: #f9fafb;
 }

@@ -6,37 +6,106 @@
 
 import os
 import io
+import asyncio
 import zipfile
 import requests
 import uvicorn
 import glob
 import re
 import json
+import secrets
 import aiohttp
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from telegram import Update
 
 # --- 초기 설정 ---
 
-# .env 파일에서 환경 변수를 로드합니다.
+# .env 파일에서 환경 변수를 로드합니다. (프로젝트 모듈 import 전에 실행)
 load_dotenv()
+
+import database
+import bot as telegram_bot
+from cache import (dividend_cache, financials_cache, dividend_json_cache, business_cache,
+                   quarterly_financials_cache, quarterly_dividend_cache)
+from services.dart import (get_corp_code, fetch_dart_financials, fetch_dividend_per_share,
+                            fetch_dart_financials_q, fetch_dividend_per_share_q,
+                            fetch_business_overview, download_reports_logic)
+
+# --- Lifespan (startup / shutdown) ---
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Startup ──────────────────────────────────────────────────────
+    await database.init_db()
+
+    if bot_app and WEBHOOK_URL:
+        await bot_app.initialize()
+        webhook_endpoint = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+        try:
+            await bot_app.bot.set_webhook(
+                url=webhook_endpoint,
+                secret_token=WEBHOOK_SECRET_TOKEN if WEBHOOK_SECRET_TOKEN else None,
+            )
+            print(f"[Bot] Webhook 등록 완료: {webhook_endpoint}")
+        except Exception as e:
+            print(f"[Bot] Webhook 등록 실패 (서버는 계속 기동됩니다): {e}")
+
+        # 매일 오전 9시(KST) 즐겨찾기 알림
+        scheduler.add_job(
+            telegram_bot.send_daily_notification,
+            CronTrigger(hour=9, minute=0),
+            args=[bot_app.bot],
+            id="daily_notification",
+            replace_existing=True,
+        )
+        scheduler.start()
+        print("[Scheduler] 일일 알림 스케줄 등록 완료 (매일 09:00 KST)")
+    else:
+        if not TELEGRAM_BOT_TOKEN:
+            print("[Bot] TELEGRAM_BOT_TOKEN 미설정 — 봇 기능 비활성화")
+        if not WEBHOOK_URL:
+            print("[Bot] WEBHOOK_URL 미설정 — Webhook 등록 건너뜀")
+
+    yield
+
+    # ── Shutdown ─────────────────────────────────────────────────────
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+    if bot_app:
+        try:
+            await bot_app.bot.delete_webhook()
+        except Exception as e:
+            print(f"[Bot] Webhook 해제 실패 (무시): {e}")
+        await bot_app.shutdown()
+        print("[Bot] 봇 종료")
+    await telegram_bot.close_session()
+
 
 # FastAPI 앱 인스턴스를 생성합니다.
 app = FastAPI(
     title="DART Report Analyzer with Gemini",
     description="FastAPI와 Gemini API를 사용하여 DART 보고서를 다운로드하고, 배당금 추이를 분석하여 그래프로 시각화합니다.",
-    version="1.2.0"
+    version="1.3.0",
+    lifespan=lifespan,
 )
 
 # --- 환경 변수 및 전역 설정 ---
 DART_API_KEY = os.getenv("DART_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Gemini API 키 추가
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # 예: https://yourdomain.com
+WEBHOOK_SECRET_TOKEN = os.getenv("WEBHOOK_SECRET_TOKEN", "")
 REPORTS_DIR = "dart_reports"
 CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
 
@@ -48,6 +117,19 @@ if not GEMINI_API_KEY:
 
 # 보고서 및 그래프를 저장할 디렉토리를 생성합니다.
 os.makedirs(REPORTS_DIR, exist_ok=True)
+
+# --- Telegram 봇 & 스케줄러 전역 인스턴스 ---
+bot_app = telegram_bot.create_bot_application() if TELEGRAM_BOT_TOKEN else None
+scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+
+# CORS 미들웨어 설정 (프론트엔드 연동)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Matplotlib 한글 폰트 설정 (기존과 동일)
 font_path = None
@@ -66,58 +148,6 @@ if font_path and os.path.exists(font_path):
 else:
     print("경고: 한글 폰트를 찾을 수 없습니다. 그래프의 한글이 깨질 수 있습니다.")
 
-
-# --- DART API 헬퍼 함수 (기존과 동일) ---
-def get_corp_code(company_name: str) -> str:
-    """회사 이름을 기반으로 DART 고유의 회사 코드를 조회합니다."""
-    corp_code_path = os.path.join(REPORTS_DIR, "corpCode.xml")
-    if not os.path.exists(corp_code_path):
-        try:
-            res = requests.get(f"{CORP_CODE_URL}?crtfc_key={DART_API_KEY}")
-            res.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-                z.extractall(REPORTS_DIR)
-        except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=500, detail=f"DART 회사 코드 목록 다운로드 실패: {e}")
-    try:
-        import xml.etree.ElementTree as ET
-        root = ET.parse(corp_code_path).getroot()
-        for item in root.findall('.//list'):
-            if company_name == item.find('corp_name').text: return item.find('corp_code').text
-    except ET.ParseError as e:
-        raise HTTPException(status_code=500, detail=f"corpCode.xml 파싱 실패: {e}")
-    raise HTTPException(status_code=404, detail=f"'{company_name}' 회사 코드를 찾을 수 없음.")
-
-
-def download_reports_logic(company_name: str, corp_code: str):
-    """주어진 회사 코드에 대해 최근 5년간의 보고서를 검색하고 다운로드합니다."""
-    # 이 함수는 기존 코드와 동일하게 유지됩니다.
-    print(f"'{company_name}'의 보고서 다운로드를 시작합니다...")
-    end_date = datetime.now()
-    start_date = end_date - timedelta(days=5 * 365)
-    list_url = "https://opendart.fss.or.kr/api/list.json"
-    params = {
-        'crtfc_key': DART_API_KEY, 'corp_code': corp_code,
-        'bgn_de': start_date.strftime('%Y%m%d'), 'end_de': end_date.strftime('%Y%m%d'),
-        'pblntf_ty': 'A', 'pblntf_detail_ty': ['A001', 'A002', 'A003'],
-        'page_no': 1, 'page_count': 100
-    }
-    try:
-        res = requests.get(list_url, params=params)
-        res.raise_for_status()
-        data = res.json()
-        if data.get('status') != '000' or not data.get('list'): return
-        for report in data['list']:
-            report_nm, rcept_no = report.get('report_nm', 'N/A'), report.get('rcept_no')
-            if any(k in report_nm for k in ['사업보고서', '분기보고서', '반기보고서']):
-                download_url = "https://opendart.fss.or.kr/api/document.xml"
-                doc_res = requests.get(download_url, params={'crtfc_key': DART_API_KEY, 'rcept_no': rcept_no})
-                doc_res.raise_for_status()
-                file_name = f"{company_name}_{report_nm.replace(' ', '_')}_{report.get('rcept_dt')}.zip"
-                with open(os.path.join(REPORTS_DIR, file_name), 'wb') as f: f.write(doc_res.content)
-                print(f" -> 성공: '{file_name}' 저장 완료.")
-    except Exception as e:
-        print(f"보고서 다운로드 중 오류 발생: {e}")
 
 
 # --- Gemini API 연동 및 분석 함수 (신규/수정) ---
@@ -296,7 +326,13 @@ async def trigger_download(request: CompanyRequest, background_tasks: Background
 async def analyze_dividends_json(company_name: str):
     """
     다운로드된 보고서를 Gemini API로 분석하여 분기별 배당금 데이터를 JSON으로 반환합니다.
+    최근 20개 조회 결과는 서버 메모리에 캐싱됩니다.
     """
+    cached = dividend_json_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' Gemini 분석 결과 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
     print(f"'{company_name}'의 분기별 배당금 분석을 시작합니다 (Gemini API 사용)...")
     report_files = glob.glob(os.path.join(REPORTS_DIR, f"{company_name}_*.zip"))
     if not report_files:
@@ -353,11 +389,12 @@ async def analyze_dividends_json(company_name: str):
     dividend_data.sort(key=lambda x: (x['year'],
                                       ['Q1', 'Q2', 'Q3', 'Q4'].index(x['quarter'])))
 
-    # 6. JSON 응답 반환
-    return JSONResponse(content={
-        'company_name': company_name,
-        'dividend_data': dividend_data
-    })
+    # 6. 캐시 저장 후 JSON 응답 반환
+    result = {'company_name': company_name, 'dividend_data': dividend_data}
+    dividend_json_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' Gemini 분석 결과 캐시 저장 (총 {dividend_json_cache.info()['size']}개)")
+
+    return JSONResponse(content={**result, 'cached': False})
 
 
 @app.get("/analyze-dividends/{company_name}", response_class=FileResponse)
@@ -406,6 +443,243 @@ async def analyze_dividends_with_gemini_endpoint(company_name: str):
         return FileResponse(graph_path, media_type='image/png')
     else:
         raise HTTPException(status_code=500, detail="그래프 파일 생성에 실패했습니다.")
+
+
+@app.get("/dividend-data/{company_name}")
+async def get_dividend_data(company_name: str):
+    """
+    기업명으로 최근 5년간 주당 현금배당금을 조회합니다.
+    - requests 블로킹 호출을 asyncio.to_thread()로 스레드풀에서 실행
+    - 연도별 조회를 asyncio.gather()로 병렬 처리
+    - 최근 20개 조회 결과는 서버 메모리에 캐싱
+    """
+    cached = dividend_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 배당금 데이터 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    # 블로킹 I/O를 스레드풀로 위임 → 이벤트 루프 비블로킹 유지
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+
+    current_year = datetime.now().year
+    candidate_years = [str(current_year - i) for i in range(1, 7)]
+
+    # 6개년 동시 조회
+    results = await asyncio.gather(
+        *[asyncio.to_thread(fetch_dividend_per_share, corp_code, year) for year in candidate_years],
+        return_exceptions=True,
+    )
+
+    dividend_data = []
+    for year, amount in zip(candidate_years, results):
+        if isinstance(amount, Exception) or amount is None:
+            continue
+        dividend_data.append({'year': int(year), 'dividend': amount})
+        if len(dividend_data) >= 5:
+            break
+
+    if not dividend_data:
+        raise HTTPException(status_code=404, detail=f"'{company_name}'의 배당금 정보를 찾을 수 없습니다. 회사명을 다시 확인해주세요.")
+
+    dividend_data.sort(key=lambda x: x['year'])
+
+    result = {'company_name': company_name, 'dividend_data': dividend_data}
+    dividend_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 배당금 데이터 캐시 저장 (총 {dividend_cache.info()['size']}개)")
+
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/financials/{company_name}")
+async def get_financials(company_name: str):
+    """
+    최근 5년간 수익성·성장성·재무건전성 지표를 DART 재무제표 API에서 조회합니다.
+    - requests 블로킹 호출을 asyncio.to_thread()로 스레드풀에서 실행
+    - 연도별 조회를 asyncio.gather()로 병렬 처리
+    - 최근 20개 조회 결과는 서버 메모리에 캐싱
+    """
+    cached = financials_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 재무 데이터 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    # 블로킹 I/O를 스레드풀로 위임
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+
+    current_year = datetime.now().year
+    # 사업보고서는 3~4월 제출이므로, 전년도부터 6개년 시도하여 5개년 확보
+    candidate_years = [str(current_year - i) for i in range(1, 7)]
+
+    # 6개년 동시 조회
+    results = await asyncio.gather(
+        *[asyncio.to_thread(fetch_dart_financials, corp_code, year) for year in candidate_years],
+        return_exceptions=True,
+    )
+
+    financials = [r for r in results if r and not isinstance(r, Exception)][:5]
+
+    if not financials:
+        raise HTTPException(status_code=404, detail=f"'{company_name}'의 재무 데이터를 찾을 수 없습니다.")
+
+    financials.sort(key=lambda x: x['year'])
+
+    result = {'company_name': company_name, 'financials': financials}
+    financials_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 재무 데이터 캐시 저장 (총 {financials_cache.info()['size']}개)")
+
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/business-overview/{company_name}")
+async def get_business_overview(company_name: str):
+    """
+    최신 사업보고서의 '사업의 내용' 1~4항을 반환합니다.
+    - 보고서 zip을 다운로드하여 HTML 파싱
+    - 최근 20개 조회 결과는 캐시에 저장
+    """
+    cached = business_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 사업개요 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    result    = await asyncio.to_thread(fetch_business_overview, corp_code, company_name)
+
+    business_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 사업개요 캐시 저장 (총 {business_cache.info()['size']}개)")
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/financials-quarterly/{company_name}")
+async def get_financials_quarterly(company_name: str):
+    """최근 2개년 분기별 재무 지표를 조회합니다."""
+    cached = quarterly_financials_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 분기 재무 데이터 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+
+    current_year = datetime.now().year
+    targets = [
+        (str(current_year - i), q)
+        for i in range(2, 0, -1)
+        for q in ['Q1', 'Q2', 'Q3', 'Q4']
+    ]
+
+    results = await asyncio.gather(
+        *[asyncio.to_thread(fetch_dart_financials_q, corp_code, year, quarter)
+          for year, quarter in targets],
+        return_exceptions=True,
+    )
+
+    financials = [
+        r for r in results
+        if r is not None and not isinstance(r, Exception)
+    ]
+
+    if not financials:
+        raise HTTPException(status_code=404, detail=f"'{company_name}'의 분기 재무 데이터를 찾을 수 없습니다.")
+
+    financials.sort(key=lambda x: (x['year'], x.get('quarter', 'Q4')))
+
+    result = {'company_name': company_name, 'period': 'quarterly', 'financials': financials}
+    quarterly_financials_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 분기 재무 데이터 캐시 저장")
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/dividend-data-quarterly/{company_name}")
+async def get_dividend_data_quarterly(company_name: str):
+    """최근 2개년 분기별 배당금을 조회합니다."""
+    cached = quarterly_dividend_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 분기 배당 데이터 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+
+    current_year = datetime.now().year
+    targets = [
+        (str(current_year - i), q)
+        for i in range(2, 0, -1)
+        for q in ['Q1', 'Q2', 'Q3', 'Q4']
+    ]
+
+    results = await asyncio.gather(
+        *[asyncio.to_thread(fetch_dividend_per_share_q, corp_code, year, quarter)
+          for year, quarter in targets],
+        return_exceptions=True,
+    )
+
+    dividend_data = []
+    for (year, quarter), amount in zip(targets, results):
+        if isinstance(amount, Exception) or amount is None or amount <= 0:
+            continue
+        dividend_data.append({
+            'year': int(year),
+            'quarter': quarter,
+            'label': year[-2:] + quarter,
+            'dividend': amount,
+        })
+
+    dividend_data.sort(key=lambda x: (x['year'], x['quarter']))
+
+    result = {'company_name': company_name, 'period': 'quarterly', 'dividend_data': dividend_data}
+    quarterly_dividend_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 분기 배당 데이터 캐시 저장")
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/cache/status")
+async def cache_status():
+    """서버에 저장된 캐시 현황을 반환합니다."""
+    return JSONResponse(content={
+        "dividend_data": dividend_cache.info(),
+        "financials": financials_cache.info(),
+        "analyze_dividends_json": dividend_json_cache.info(),
+        "business_overview": business_cache.info(),
+    })
+
+
+@app.delete("/cache/clear")
+async def cache_clear(company_name: str = None):
+    """
+    캐시를 초기화합니다.
+    - company_name 파라미터 없음: 전체 캐시 삭제
+    - company_name 지정: 해당 기업 캐시만 삭제
+    """
+    if company_name:
+        removed = any([
+            dividend_cache.clear(company_name),
+            financials_cache.clear(company_name),
+            dividend_json_cache.clear(company_name),
+            business_cache.clear(company_name),
+        ])
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"'{company_name}'의 캐시 데이터가 없습니다.")
+        return {"message": f"'{company_name}'의 캐시가 삭제되었습니다."}
+    else:
+        dividend_cache.clear()
+        financials_cache.clear()
+        dividend_json_cache.clear()
+        business_cache.clear()
+        return {"message": "전체 캐시가 삭제되었습니다."}
+
+
+@app.post("/webhook", include_in_schema=False)
+async def telegram_webhook(request: Request):
+    """Telegram이 메시지를 밀어주는 Webhook 엔드포인트."""
+    if WEBHOOK_SECRET_TOKEN:
+        incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not secrets.compare_digest(incoming, WEBHOOK_SECRET_TOKEN):
+            raise HTTPException(status_code=403, detail="Forbidden")
+    if not bot_app:
+        raise HTTPException(status_code=503, detail="봇이 비활성화 상태입니다.")
+    data = await request.json()
+    update = Update.de_json(data, bot_app.bot)
+    await bot_app.process_update(update)
+    return {"ok": True}
 
 
 @app.get("/", include_in_schema=False)

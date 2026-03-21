@@ -4,9 +4,7 @@ import { useParams } from 'next/navigation';
 
 export function Control({ userId }) { // Receive userId as a prop
   const params = useParams();
-  const id = params.id; // This is the topic id from the URL
-
-  const isAdmin = userId === 'admin'; // Check if the user is an admin
+  const isAdmin = userId === 'admin' && !!params.id;
 
   return (
     <ul>

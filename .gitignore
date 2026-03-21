@@ -1,0 +1,7 @@
+
+__pycache__/
+*.pyc
+*.pyo
+simple_fast_api/.cache/
+simple_fast_api/bot_data.db
+simple_fast_api/dart_reports/

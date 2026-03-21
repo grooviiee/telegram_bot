@@ -1,6 +1,5 @@
 
 import { DashboardCard } from '@/components/DashboardCard';
-import Link from 'next/link';
 
 // 메인 App 컴포넌트
 export default async function App () {

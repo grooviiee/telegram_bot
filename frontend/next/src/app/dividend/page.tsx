@@ -1,6 +1,7 @@
-"use client"; // 이 컴포넌트는 클라이언트 컴포넌트임을 명시합니다.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+"use client";
 
-import React, { useState } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
@@ -11,257 +12,203 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import { ProgressIndicator } from '@/components/ProgressIndicator';
+import { PeriodToggle } from '@/components/PeriodToggle';
+import { useDartData } from '@/lib/useDartData';
 
-// Chart.js에 필요한 컴포넌트들을 등록합니다.
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend
-);
+ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
-// 배당 데이터를 위한 인터페이스 정의
-interface DividendData {
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
+
+const PAGE_KEY = 'dividend';
+
+const DIVIDEND_STEPS = [
+  { label: '회사명으로 DART 기업 정보를 검색하는 중', after: 0 },
+  { label: 'DART 배당 데이터를 조회하는 중',          after: 1_500 },
+  { label: '5개년 배당금을 집계하는 중',               after: 4_000 },
+];
+
+interface DividendItem {
   year: number;
-  amount: number;
+  dividend: number;
+  quarter?: string;
+  label?: string;
 }
 
-// 차트 데이터를 위한 인터페이스 정의
-interface ChartDataItem {
-  labels: string[];
-  datasets: {
-    label: string;
-    data: number[];
-    backgroundColor: string;
-    borderColor: string;
-    borderWidth: number;
-  }[];
+interface DividendPageProps {
+  favorites?: { company: string; page: string }[];
+  toggleFavorite?: (company: string, page: string) => void;
+  isFavorite?: (company: string, page: string) => boolean;
+  initialCompany?: string;
+  onSearched?: () => void;
 }
 
-export default function DividendChartPage(): JSX.Element {
-  // 환경 변수에서 기본 회사 고유번호를 가져옵니다.
-  // NEXT_PUBLIC_DEFAULT_CORP_CODE가 정의되어 있지 않으면 빈 문자열을 기본값으로 사용합니다.
-  const defaultCorpCode = process.env.NEXT_PUBLIC_DEFAULT_CORP_CODE || '';
-  const [companyCorpCode, setCompanyCorpCode] = useState<string>(defaultCorpCode); // 회사 고유번호 입력 필드
-  const [message, setMessage] = useState<string>('');
-  const [loading, setLoading] = useState<boolean>(false);
-  const [chartData, setChartData] = useState<ChartDataItem | null>(null);
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export default function DividendChartPage(rawProps: any) {
+  const props = rawProps as DividendPageProps;
+  const {
+    favorites: _favorites,
+    toggleFavorite,
+    isFavorite,
+    initialCompany,
+    onSearched,
+  } = props;
+  const { companyName, setCompanyName, loading, message, resolvedName, fetchData, data: rawData } =
+    useDartData<DividendItem[]>(
+      {
+        buildPath: (n) => `/dividend-data/${n}`,
+        extractData: (j) => (j as any).dividend_data,
+      },
+      initialCompany,
+      onSearched,
+    );
 
-  const handleFetchDividend = async (): Promise<void> => {
-    if (!companyCorpCode) {
-      setMessage('회사 고유번호를 입력해주세요.');
-      return;
-    }
+  const [period, setPeriod] = useState<'annual' | 'quarterly'>('annual');
+  const [quarterlyData, setQuarterlyData] = useState<DividendItem[] | null>(null);
+  const [quarterlyLoading, setQuarterlyLoading] = useState(false);
+  const quarterlyFetchedRef = useRef<string | null>(null);
 
-    setLoading(true);
-    setMessage('배당 내역을 불러오는 중...');
-    setChartData(null); // 새로운 조회 시작 시 이전 차트 데이터 초기화
+  // 새 회사 검색 시 분기 상태 초기화
+  React.useEffect(() => {
+    setQuarterlyData(null);
+    quarterlyFetchedRef.current = null;
+    setPeriod('annual');
+  }, [resolvedName]);
 
+  const fetchQuarterly = useCallback(async (name: string) => {
+    if (quarterlyFetchedRef.current === name) return;
+    quarterlyFetchedRef.current = name;
+    setQuarterlyLoading(true);
     try {
-      // Flask 백엔드의 /get_dividend 엔드포인트 호출
-      const response: Response = await fetch(`http://localhost:5000/get_dividend?company=${companyCorpCode}`);
-      const data: { status?: string; company_corp_code?: string; dividend_history?: DividendData[]; error?: string; message?: string } = await response.json();
-
-      if (response.ok && data.status === "success" && data.dividend_history) {
-        setMessage(`'${companyCorpCode}'의 배당 내역을 성공적으로 조회했습니다.`);
-        
-        // Chart.js 데이터 형식으로 변환
-        const labels = data.dividend_history.map(item => String(item.year)); // 연도를 문자열로 변환
-        const amounts = data.dividend_history.map(item => item.amount); // 배당액
-
-        setChartData({
-          labels: labels,
-          datasets: [
-            {
-              label: '주당 현금 배당액 (원)',
-              data: amounts,
-              backgroundColor: 'rgba(75, 192, 192, 0.6)',
-              borderColor: 'rgba(75, 192, 192, 1)',
-              borderWidth: 1,
-            },
-          ],
-        });
-      } else {
-        setMessage(`오류: ${data.message || data.error || '알 수 없는 오류가 발생했습니다.'}`);
-      }
-    } catch (error: any) {
-      setMessage(`네트워크 오류: ${error.message}. Flask 서버가 실행 중인지 확인하세요.`);
+      const res = await fetch(
+        `${API_BASE}/dividend-data-quarterly/${encodeURIComponent(name)}`,
+        { signal: AbortSignal.timeout(300_000) }
+      );
+      const json = await res.json() as any;
+      if (!res.ok) throw new Error(json.detail || '분기 데이터 조회 실패');
+      setQuarterlyData(json.dividend_data);
+    } catch {
+      quarterlyFetchedRef.current = null;
     } finally {
-      setLoading(false);
+      setQuarterlyLoading(false);
+    }
+  }, []);
+
+  const handlePeriodChange = (newPeriod: 'annual' | 'quarterly') => {
+    setPeriod(newPeriod);
+    if (newPeriod === 'quarterly' && resolvedName) {
+      fetchQuarterly(resolvedName);
     }
   };
 
-  // Chart.js 옵션 설정
+  const dividendItems = period === 'annual' ? rawData : quarterlyData;
+  const isLoading = loading || (period === 'quarterly' && quarterlyLoading);
+
+  const chartData = React.useMemo(() => {
+    if (!dividendItems || dividendItems.length === 0) return null;
+    const labels = dividendItems.map((d) => d.label ?? String(d.year));
+    const amounts = dividendItems.map((d) => d.dividend);
+    return {
+      labels,
+      datasets: [
+        {
+          label: '주당 현금배당금 (원)',
+          data: amounts,
+          backgroundColor: 'rgba(59, 130, 246, 0.65)',
+          borderColor: 'rgba(59, 130, 246, 1)',
+          borderWidth: 1,
+        },
+      ],
+    };
+  }, [dividendItems]);
+
   const options = {
     responsive: true,
     plugins: {
-      legend: {
-        position: 'top' as const,
-      },
+      legend: { position: 'top' as const },
       title: {
         display: true,
-        text: `${companyCorpCode} 배당 내역 (최근 5개년)`,
+        text: resolvedName ? `${resolvedName} — 배당금 추이` : '배당금 추이',
+        font: { size: 14 },
       },
-      tooltip: { // 툴팁에 콤마 추가
+      tooltip: {
         callbacks: {
-          label: function(context: any) {
-            let label = context.dataset.label || '';
-            if (label) {
-              label += ': ';
-            }
-            if (context.parsed.y !== null) {
-              label += context.parsed.y.toLocaleString() + '원';
-            }
-            return label;
-          }
-        }
-      }
+          label: (ctx: any) =>
+            `${ctx.dataset.label}: ${ctx.parsed.y?.toLocaleString()}원`,
+        },
+      },
     },
     scales: {
       y: {
         beginAtZero: true,
-        title: {
-          display: true,
-          text: '배당액 (원)',
-        },
-        ticks: { // Y축 눈금에 콤마 추가
-            callback: function(value: string | number) {
-                return Number(value).toLocaleString();
-            }
-        }
+        title: { display: true, text: '배당금 (원)' },
+        ticks: { callback: (v: string | number) => Number(v).toLocaleString() },
       },
-      x: {
-        title: {
-          display: true,
-          text: '사업연도',
-        }
-      }
-    }
+      x: { title: { display: true, text: '사업연도' } },
+    },
   };
 
-  return (
-    <div style={styles.container}>
-      <h1 style={styles.heading}>기업 배당 내역 조회 및 차트</h1>
-      <p style={styles.paragraph}>OpenDART 회사 고유번호 (8자리)를 입력하고 배당 내역을 조회하세요.</p>
+  const isError = message.startsWith('오류');
+  const starred = resolvedName && isFavorite ? isFavorite(resolvedName, PAGE_KEY) : false;
 
-      <div style={styles.inputGroup}>
+  return (
+    <div className="p-6 bg-gray-50 min-h-screen">
+      <h1 className="text-2xl font-bold text-gray-800 mb-1">배당 분석</h1>
+      <p className="text-sm text-gray-500 mb-6">DART 공시 기반 5개년 분기별 배당금 추이</p>
+
+      <div className="flex gap-3 mb-4">
         <input
           type="text"
-          placeholder="회사 고유번호 (예: 00126380)" // 삼성전자 고유번호
-          value={companyCorpCode}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCompanyCorpCode(e.target.value)}
-          style={styles.input}
-          disabled={loading}
+          placeholder="회사명 입력 (예: 삼성전자)"
+          value={companyName}
+          onChange={(e) => setCompanyName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && fetchData()}
+          disabled={isLoading}
+          className="flex-1 max-w-xs px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
         />
         <button
-          onClick={handleFetchDividend}
-          style={styles.button}
-          disabled={loading}
+          onClick={() => fetchData()}
+          disabled={isLoading}
+          className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
         >
-          {loading ? '조회 중...' : '배당 내역 조회'}
+          {isLoading ? '조회 중...' : '조회'}
         </button>
+        {resolvedName && toggleFavorite && (
+          <button
+            onClick={() => toggleFavorite(resolvedName, PAGE_KEY)}
+            title={starred ? '즐겨찾기 해제' : '즐겨찾기 추가'}
+            className={`px-3 py-2 rounded-lg text-xl leading-none transition-colors ${
+              starred
+                ? 'text-yellow-400 hover:text-gray-300'
+                : 'text-gray-300 hover:text-yellow-400'
+            }`}
+          >
+            {starred ? '★' : '☆'}
+          </button>
+        )}
       </div>
 
+      <div className="mb-4">
+        <PeriodToggle value={period} onChange={handlePeriodChange} disabled={!resolvedName} />
+      </div>
+
+      <ProgressIndicator steps={DIVIDEND_STEPS} active={loading} />
+
       {message && (
-        <p style={{
-          ...styles.message,
-          color: message.startsWith('오류') || message.startsWith('네트워크') ? '#dc3545' : '#28a745'
-        }}>
+        <p className={`mb-5 text-sm font-medium ${isError ? 'text-red-500' : 'text-green-600'}`}>
           {message}
         </p>
       )}
 
-      {/* 차트 표시 조건: 차트 데이터가 있고, 데이터셋의 데이터가 0이 아닌 값이 하나라도 있을 때 */}
-      {chartData && chartData.datasets[0].data.some(amount => amount > 0) ? (
-        <div style={styles.chartContainer}>
+      {period === 'quarterly' && quarterlyLoading && (
+        <p className="mb-4 text-sm text-blue-500">분기 데이터를 조회하는 중...</p>
+      )}
+
+      {chartData && chartData.datasets[0].data.some((v: number) => v > 0) && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 max-w-3xl">
           <Bar options={options} data={chartData} />
         </div>
-      ) : (
-        // 데이터가 없거나 모두 0일 때 메시지 표시
-        chartData && !loading && message.startsWith("성공") && (
-            <p style={styles.noDataMessage}>조회된 배당 데이터가 없거나 모든 연도의 배당액이 0입니다.</p>
-        )
       )}
     </div>
   );
 }
-
-// 스타일 (이전 예시와 동일하며, 필요에 따라 조정 가능)
-interface Styles {
-  [key: string]: React.CSSProperties;
-}
-
-const styles: Styles = {
-  container: {
-    display: 'flex',
-    flexDirection: 'column' as 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '100vh',
-    padding: '20px',
-    fontFamily: 'Arial, sans-serif',
-    backgroundColor: '#f8f9fa',
-    color: '#343a40',
-  },
-  heading: {
-    fontSize: '2.5em',
-    color: '#0056b3',
-    marginBottom: '20px',
-    textAlign: 'center' as 'center',
-  },
-  paragraph: {
-    fontSize: '1.1em',
-    marginBottom: '25px',
-    textAlign: 'center' as 'center',
-    maxWidth: '600px',
-    lineHeight: '1.5',
-  },
-  inputGroup: {
-    display: 'flex',
-    marginBottom: '20px',
-    gap: '10px',
-  },
-  input: {
-    width: '100%',
-    maxWidth: '300px',
-    padding: '12px 15px',
-    borderRadius: '8px',
-    border: '1px solid #ced4da',
-    fontSize: '1em',
-    boxSizing: 'border-box' as 'border-box',
-  },
-  button: {
-    padding: '12px 25px',
-    fontSize: '1.1em',
-    borderRadius: '8px',
-    border: 'none',
-    backgroundColor: '#007bff',
-    color: 'white',
-    cursor: 'pointer',
-    transition: 'background-color 0.3s ease',
-  },
-  message: {
-    marginTop: '25px',
-    padding: '10px 20px',
-    borderRadius: '5px',
-    backgroundColor: '#e9ecef',
-    border: '1px solid #dee2e6',
-    textAlign: 'center' as 'center',
-  },
-  chartContainer: {
-    width: '100%',
-    maxWidth: '800px',
-    marginTop: '30px',
-    padding: '20px',
-    backgroundColor: 'white',
-    borderRadius: '8px',
-    boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)',
-  },
-  noDataMessage: {
-    marginTop: '30px',
-    fontSize: '1.2em',
-    color: '#6c757d',
-  }
-};
