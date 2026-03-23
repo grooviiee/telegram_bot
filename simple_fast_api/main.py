@@ -38,9 +38,9 @@ import database
 import bot as telegram_bot
 from cache import (dividend_cache, financials_cache, dividend_json_cache, business_cache,
                    quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
-                   report_cache)
+                   report_cache, buffett_report_cache)
 from services.valuation import fetch_valuation
-from services.report import generate_report
+from services.report import generate_report, generate_buffett_report
 from services.chat import build_system_context, chat_with_gemini
 from services.dart import (get_corp_code, fetch_dart_financials, fetch_dividend_per_share,
                             fetch_dart_financials_q, fetch_dividend_per_share_q,
@@ -701,14 +701,69 @@ async def get_report(company_name: str):
     return JSONResponse(content={**result, 'cached': False})
 
 
+@app.get("/buffett-report/{company_name}")
+async def get_buffett_report(company_name: str):
+    """워렌 버핏 투자 철학을 적용한 종합 투자 리포트를 생성합니다.
+    경제적 해자, 내재가치, 안전마진 관점에서 분석합니다."""
+    cached = buffett_report_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 버핏 리포트 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    current_year = datetime.now().year
+
+    def fetch_filings_sync():
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/list.json",
+            params={
+                'crtfc_key': DART_API_KEY, 'corp_code': corp_code,
+                'bgn_de': f"{current_year - 1}0101",
+                'end_de': f"{current_year}1231",
+                'sort': 'date', 'sort_mth': 'desc', 'page_count': 10,
+            },
+            timeout=15,
+        )
+        data = res.json()
+        return data.get('list', []) if data.get('status') == '000' else []
+
+    biz_result, filings, fin_all = await asyncio.gather(
+        asyncio.to_thread(fetch_business_overview, corp_code, company_name),
+        asyncio.to_thread(fetch_filings_sync),
+        asyncio.gather(
+            *[asyncio.to_thread(fetch_dart_financials, corp_code, str(y))
+              for y in range(current_year - 1, current_year - 6, -1)],
+            return_exceptions=True,
+        ),
+        return_exceptions=True,
+    )
+
+    business_sections = biz_result.get('sections', []) if isinstance(biz_result, dict) else []
+    recent_filings    = filings if isinstance(filings, list) else []
+    financials        = [f for f in (fin_all if isinstance(fin_all, (list, tuple)) else []) if isinstance(f, dict)]
+    dividends         = (dividend_cache.get(company_name) or {}).get('dividend_data', [])
+    valuation         = valuation_cache.get(company_name)
+
+    report_text = await generate_buffett_report(
+        company_name, business_sections, financials, dividends, valuation, recent_filings
+    )
+
+    result = {'company_name': company_name, 'report': report_text, 'mode': 'buffett'}
+    buffett_report_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 버핏 리포트 캐시 저장")
+    return JSONResponse(content={**result, 'cached': False})
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []
+    mode: str = "general"   # "general" | "buffett"
 
 
 @app.post("/chat/{company_name}")
 async def chat(company_name: str, req: ChatRequest):
-    """공시 데이터를 컨텍스트로 Gemini AI와 멀티턴 상담을 수행합니다."""
+    """공시 데이터를 컨텍스트로 Gemini AI와 멀티턴 상담을 수행합니다.
+    mode="buffett" 시 워렌 버핏 투자 철학 기반으로 답변합니다."""
     corp_code = await asyncio.to_thread(get_corp_code, company_name)
     current_year = datetime.now().year
 
@@ -760,11 +815,16 @@ async def chat(company_name: str, req: ChatRequest):
     dividends         = (dividend_cache.get(company_name) or {}).get('dividend_data', [])
     valuation         = valuation_cache.get(company_name)
 
+    buffett_mode = req.mode == "buffett"
     system_context = build_system_context(
-        company_name, business_sections, financials, dividends, valuation, filings
+        company_name, business_sections, financials, dividends, valuation, filings,
+        buffett_mode=buffett_mode,
     )
-    answer = await chat_with_gemini(system_context, req.history, req.message, company_name)
-    return JSONResponse(content={"answer": answer})
+    answer = await chat_with_gemini(
+        system_context, req.history, req.message, company_name,
+        buffett_mode=buffett_mode,
+    )
+    return JSONResponse(content={"answer": answer, "mode": req.mode})
 
 
 @app.get("/cache/status")
@@ -778,6 +838,8 @@ async def cache_status():
         "quarterly_financials": quarterly_financials_cache.info(),
         "quarterly_dividend": quarterly_dividend_cache.info(),
         "valuation": valuation_cache.info(),
+        "report": report_cache.info(),
+        "buffett_report": buffett_report_cache.info(),
     })
 
 
@@ -794,6 +856,8 @@ async def cache_clear(company_name: str = None):
             financials_cache.clear(company_name),
             dividend_json_cache.clear(company_name),
             business_cache.clear(company_name),
+            report_cache.clear(company_name),
+            buffett_report_cache.clear(company_name),
         ])
         if not removed:
             raise HTTPException(status_code=404, detail=f"'{company_name}'의 캐시 데이터가 없습니다.")
@@ -803,6 +867,8 @@ async def cache_clear(company_name: str = None):
         financials_cache.clear()
         dividend_json_cache.clear()
         business_cache.clear()
+        report_cache.clear()
+        buffett_report_cache.clear()
         return {"message": "전체 캐시가 삭제되었습니다."}
 
 
