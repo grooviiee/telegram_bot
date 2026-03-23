@@ -32,12 +32,16 @@ from telegram import Update
 # --- 초기 설정 ---
 
 # .env 파일에서 환경 변수를 로드합니다. (프로젝트 모듈 import 전에 실행)
-load_dotenv()
+load_dotenv(override=True)
 
 import database
 import bot as telegram_bot
 from cache import (dividend_cache, financials_cache, dividend_json_cache, business_cache,
-                   quarterly_financials_cache, quarterly_dividend_cache)
+                   quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
+                   report_cache)
+from services.valuation import fetch_valuation
+from services.report import generate_report
+from services.chat import build_system_context, chat_with_gemini
 from services.dart import (get_corp_code, fetch_dart_financials, fetch_dividend_per_share,
                             fetch_dart_financials_q, fetch_dividend_per_share_q,
                             fetch_business_overview, download_reports_logic)
@@ -246,7 +250,7 @@ def extract_dividend_section(zip_path: str) -> str | None:
 
 async def get_dividend_from_gemini(text_content: str) -> int | None:
     """Gemini API를 호출하여 텍스트에서 주당 배당금을 추출합니다."""
-    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    api_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     prompt = f"""
     아래는 DART 공시 보고서의 '배당에 관한 사항' 텍스트입니다.
@@ -552,7 +556,7 @@ async def get_business_overview(company_name: str):
 
 @app.get("/financials-quarterly/{company_name}")
 async def get_financials_quarterly(company_name: str):
-    """최근 2개년 분기별 재무 지표를 조회합니다."""
+    """최근 5개년 분기별 재무 지표를 조회합니다."""
     cached = quarterly_financials_cache.get(company_name)
     if cached is not None:
         print(f"[Cache] '{company_name}' 분기 재무 데이터 캐시 히트")
@@ -563,7 +567,7 @@ async def get_financials_quarterly(company_name: str):
     current_year = datetime.now().year
     targets = [
         (str(current_year - i), q)
-        for i in range(2, 0, -1)
+        for i in range(5, 0, -1)
         for q in ['Q1', 'Q2', 'Q3', 'Q4']
     ]
 
@@ -591,7 +595,7 @@ async def get_financials_quarterly(company_name: str):
 
 @app.get("/dividend-data-quarterly/{company_name}")
 async def get_dividend_data_quarterly(company_name: str):
-    """최근 2개년 분기별 배당금을 조회합니다."""
+    """최근 5개년 분기별 배당금을 조회합니다."""
     cached = quarterly_dividend_cache.get(company_name)
     if cached is not None:
         print(f"[Cache] '{company_name}' 분기 배당 데이터 캐시 히트")
@@ -602,7 +606,7 @@ async def get_dividend_data_quarterly(company_name: str):
     current_year = datetime.now().year
     targets = [
         (str(current_year - i), q)
-        for i in range(2, 0, -1)
+        for i in range(5, 0, -1)
         for q in ['Q1', 'Q2', 'Q3', 'Q4']
     ]
 
@@ -631,6 +635,138 @@ async def get_dividend_data_quarterly(company_name: str):
     return JSONResponse(content={**result, 'cached': False})
 
 
+@app.get("/valuation/{company_name}")
+async def get_valuation(company_name: str):
+    """현재 주가 기반 밸류에이션 지표를 반환합니다 (PER, PBR, PSR, EV/EBIT)."""
+    cached = valuation_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 밸류에이션 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    result = await asyncio.to_thread(fetch_valuation, company_name)
+    valuation_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 밸류에이션 캐시 저장")
+    return JSONResponse(content={**result, 'cached': False})
+
+
+@app.get("/report/{company_name}")
+async def get_report(company_name: str):
+    """Gemini AI를 이용해 종합 투자 리포트를 생성합니다."""
+    cached = report_cache.get(company_name)
+    if cached is not None:
+        print(f"[Cache] '{company_name}' 리포트 캐시 히트")
+        return JSONResponse(content={**cached, 'cached': True})
+
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    current_year = datetime.now().year
+
+    def fetch_filings_sync():
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/list.json",
+            params={
+                'crtfc_key': DART_API_KEY, 'corp_code': corp_code,
+                'bgn_de': f"{current_year - 1}0101",
+                'end_de': f"{current_year}1231",
+                'sort': 'date', 'sort_mth': 'desc', 'page_count': 10,
+            },
+            timeout=15,
+        )
+        data = res.json()
+        return data.get('list', []) if data.get('status') == '000' else []
+
+    biz_result, filings, fin_all = await asyncio.gather(
+        asyncio.to_thread(fetch_business_overview, corp_code, company_name),
+        asyncio.to_thread(fetch_filings_sync),
+        asyncio.gather(
+            *[asyncio.to_thread(fetch_dart_financials, corp_code, str(y))
+              for y in range(current_year - 1, current_year - 6, -1)],
+            return_exceptions=True,
+        ),
+        return_exceptions=True,
+    )
+
+    business_sections = biz_result.get('sections', []) if isinstance(biz_result, dict) else []
+    recent_filings    = filings if isinstance(filings, list) else []
+    financials        = [f for f in (fin_all if isinstance(fin_all, (list, tuple)) else []) if isinstance(f, dict)]
+    dividends         = (dividend_cache.get(company_name) or {}).get('dividend_data', [])
+    valuation         = valuation_cache.get(company_name)
+
+    report_text = await generate_report(
+        company_name, business_sections, financials, dividends, valuation, recent_filings
+    )
+
+    result = {'company_name': company_name, 'report': report_text}
+    report_cache.set(company_name, result)
+    print(f"[Cache] '{company_name}' 리포트 캐시 저장")
+    return JSONResponse(content={**result, 'cached': False})
+
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[dict] = []
+
+
+@app.post("/chat/{company_name}")
+async def chat(company_name: str, req: ChatRequest):
+    """공시 데이터를 컨텍스트로 Gemini AI와 멀티턴 상담을 수행합니다."""
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    current_year = datetime.now().year
+
+    def fetch_filings_sync():
+        res = requests.get(
+            "https://opendart.fss.or.kr/api/list.json",
+            params={
+                'crtfc_key': DART_API_KEY, 'corp_code': corp_code,
+                'bgn_de': f"{current_year - 1}0101",
+                'end_de': f"{current_year}1231",
+                'sort': 'date', 'sort_mth': 'desc', 'page_count': 10,
+            },
+            timeout=15,
+        )
+        data = res.json()
+        return data.get('list', []) if data.get('status') == '000' else []
+
+    # 캐시 우선 사용
+    biz_cached = business_cache.get(company_name)
+    fin_cached = financials_cache.get(company_name)
+
+    tasks = []
+    need_biz = biz_cached is None
+    need_fin = fin_cached is None
+
+    if need_biz:
+        tasks.append(asyncio.to_thread(fetch_business_overview, corp_code, company_name))
+    if need_fin:
+        tasks.append(asyncio.gather(
+            *[asyncio.to_thread(fetch_dart_financials, corp_code, str(y))
+              for y in range(current_year - 1, current_year - 4, -1)],
+            return_exceptions=True,
+        ))
+    tasks.append(asyncio.to_thread(fetch_filings_sync))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    idx = 0
+    if need_biz:
+        biz_cached = results[idx] if isinstance(results[idx], dict) else {}
+        idx += 1
+    if need_fin:
+        fin_all = results[idx] if isinstance(results[idx], (list, tuple)) else []
+        fin_cached = {'financials': [f for f in fin_all if isinstance(f, dict)]}
+        idx += 1
+    filings = results[idx] if isinstance(results[idx], list) else []
+
+    business_sections = (biz_cached or {}).get('sections', [])
+    financials        = (fin_cached or {}).get('financials', [])
+    dividends         = (dividend_cache.get(company_name) or {}).get('dividend_data', [])
+    valuation         = valuation_cache.get(company_name)
+
+    system_context = build_system_context(
+        company_name, business_sections, financials, dividends, valuation, filings
+    )
+    answer = await chat_with_gemini(system_context, req.history, req.message, company_name)
+    return JSONResponse(content={"answer": answer})
+
+
 @app.get("/cache/status")
 async def cache_status():
     """서버에 저장된 캐시 현황을 반환합니다."""
@@ -639,6 +775,9 @@ async def cache_status():
         "financials": financials_cache.info(),
         "analyze_dividends_json": dividend_json_cache.info(),
         "business_overview": business_cache.info(),
+        "quarterly_financials": quarterly_financials_cache.info(),
+        "quarterly_dividend": quarterly_dividend_cache.info(),
+        "valuation": valuation_cache.info(),
     })
 
 

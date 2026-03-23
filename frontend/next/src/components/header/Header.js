@@ -6,6 +6,9 @@ const NAV_ITEMS = [
   { key: 'dividend',         label: '배당 분석' },
   { key: 'profitability',    label: '수익성 & 성장성' },
   { key: 'financial-health', label: '재무 건전성' },
+  { key: 'valuation',        label: '밸류에이션' },
+  { key: 'report',           label: 'AI 리포트' },
+  { key: 'chat',             label: 'AI 상담' },
 ];
 
 export function Header({ activePage, setActivePage, favoriteCount = 0 }) {

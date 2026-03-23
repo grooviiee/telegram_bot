@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import HTTPException
 from bs4 import BeautifulSoup
 
-load_dotenv()
+load_dotenv(override=True)
 DART_API_KEY: str = os.getenv("DART_API_KEY", "")
 REPORTS_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "dart_reports")
 CORP_CODE_URL = "https://opendart.fss.or.kr/api/corpCode.xml"
@@ -56,13 +56,21 @@ def _accounts_to_metrics(accounts: dict, year: int, fs_div: str) -> dict:
     capex_raw        = get_account_value(accounts, '유형자산의 취득', '유형자산취득', '유형자산의취득')
     eps              = get_account_value(accounts, '기본주당순이익(손실)', '기본주당이익(손실)', '기본주당순이익', '주당이익')
     cash             = get_account_value(accounts, '현금및현금성자산')
+    # 이자부부채: 단기차입금 + 유동성장기부채 + 사채 + 장기차입금 (공시 보고서 기준)
+    short_borrow     = get_account_value(accounts, '단기차입금')
+    current_long     = get_account_value(accounts, '유동성장기부채')
+    bonds            = get_account_value(accounts, '사채')
+    long_borrow      = get_account_value(accounts, '장기차입금')
+    interest_bearing = sum(x for x in [short_borrow, current_long, bonds, long_borrow] if x is not None) or None
+
     capex = abs(capex_raw) if capex_raw is not None else None
     operating_margin = round(operating_income / revenue * 100, 2) if revenue and operating_income else None
     roe              = round(net_income / equity * 100, 2)           if equity and net_income       else None
     debt_ratio       = round(liabilities / equity * 100, 2)          if equity and liabilities      else None
     current_ratio    = round(current_assets / current_liab * 100, 2) if current_liab and current_assets else None
     fcf              = (op_cash_flow - capex) if (op_cash_flow is not None and capex is not None) else op_cash_flow
-    net_debt         = (liabilities - cash)   if (liabilities is not None and cash is not None)  else None
+    # 순부채 = 이자부부채 - 현금 (음수이면 순현금 보유)
+    net_debt         = (interest_bearing - cash) if (interest_bearing is not None and cash is not None) else None
     net_debt_ratio   = round(net_debt / equity * 100, 2) if (equity and net_debt is not None) else None
     return {
         'year': year, 'fs_div': fs_div,

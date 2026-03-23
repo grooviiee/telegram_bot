@@ -9,6 +9,9 @@ import BusinessPage from './business/page';
 import ProfitabilityPage from './profitability/page';
 import FinancialHealthPage from './financial-health/page';
 import FavoritesPage from './favorites/page';
+import ValuationPage from './valuation/page';
+import ReportPage from './report/page';
+import ChatPage from './chat/page';
 
 const STORAGE_KEY = 'dart_favorites';
 
@@ -68,6 +71,9 @@ export function InteractiveLayout() {
       case 'dividend':         return <DividendPage {...sharedProps} />;
       case 'profitability':    return <ProfitabilityPage {...sharedProps} />;
       case 'financial-health': return <FinancialHealthPage {...sharedProps} />;
+      case 'valuation':        return <ValuationPage {...sharedProps} />;
+      case 'report':           return <ReportPage {...sharedProps} />;
+      case 'chat':             return <ChatPage initialCompany={pendingSearch?.page === 'chat' ? pendingSearch.company : undefined} onSearched={onSearched} />;
       case 'favorites':        return <FavoritesPage favorites={favorites} toggleFavorite={toggleFavorite} onFavoriteClick={handleFavoriteClick} />;
       default:                 return <HomePage />;
     }
