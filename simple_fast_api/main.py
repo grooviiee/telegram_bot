@@ -53,17 +53,19 @@ async def lifespan(app: FastAPI):
     # ── Startup ──────────────────────────────────────────────────────
     await database.init_db()
 
-    if bot_app and WEBHOOK_URL:
+    if bot_app:
         await bot_app.initialize()
-        webhook_endpoint = f"{WEBHOOK_URL.rstrip('/')}/webhook"
+        # 기존 webhook 해제 후 polling 시작
         try:
-            await bot_app.bot.set_webhook(
-                url=webhook_endpoint,
-                secret_token=WEBHOOK_SECRET_TOKEN if WEBHOOK_SECRET_TOKEN else None,
-            )
-            print(f"[Bot] Webhook 등록 완료: {webhook_endpoint}")
-        except Exception as e:
-            print(f"[Bot] Webhook 등록 실패 (서버는 계속 기동됩니다): {e}")
+            await bot_app.bot.delete_webhook(drop_pending_updates=True)
+        except Exception:
+            pass
+        await bot_app.start()
+        await bot_app.updater.start_polling(
+            allowed_updates=["message", "callback_query"],
+            drop_pending_updates=True,
+        )
+        print("[Bot] Polling 모드로 시작됨")
 
         # 매일 오전 9시(KST) 즐겨찾기 알림
         scheduler.add_job(
@@ -76,10 +78,7 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         print("[Scheduler] 일일 알림 스케줄 등록 완료 (매일 09:00 KST)")
     else:
-        if not TELEGRAM_BOT_TOKEN:
-            print("[Bot] TELEGRAM_BOT_TOKEN 미설정 — 봇 기능 비활성화")
-        if not WEBHOOK_URL:
-            print("[Bot] WEBHOOK_URL 미설정 — Webhook 등록 건너뜀")
+        print("[Bot] TELEGRAM_BOT_TOKEN 미설정 — 봇 기능 비활성화")
 
     yield
 
@@ -87,10 +86,8 @@ async def lifespan(app: FastAPI):
     if scheduler.running:
         scheduler.shutdown(wait=False)
     if bot_app:
-        try:
-            await bot_app.bot.delete_webhook()
-        except Exception as e:
-            print(f"[Bot] Webhook 해제 실패 (무시): {e}")
+        await bot_app.updater.stop()
+        await bot_app.stop()
         await bot_app.shutdown()
         print("[Bot] 봇 종료")
     await telegram_bot.close_session()
@@ -794,7 +791,7 @@ async def chat(company_name: str, req: ChatRequest):
     if need_fin:
         tasks.append(asyncio.gather(
             *[asyncio.to_thread(fetch_dart_financials, corp_code, str(y))
-              for y in range(current_year - 1, current_year - 4, -1)],
+              for y in range(current_year - 1, current_year - 6, -1)],
             return_exceptions=True,
         ))
     tasks.append(asyncio.to_thread(fetch_filings_sync))

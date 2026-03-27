@@ -277,9 +277,15 @@ def _is_data_table(table_elem) -> bool:
 
 
 def _clean_table_html(table_elem) -> str:
-    """Return minimal HTML for a table (structural tags only, no attrs)."""
+    """Return minimal HTML for a table (structural tags only, keep colspan/rowspan)."""
     from bs4 import Tag, NavigableString
     ALLOWED = {'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col'}
+    # structural attributes to preserve per tag
+    KEEP_ATTRS = {
+        'td':  {'colspan', 'rowspan'},
+        'th':  {'colspan', 'rowspan'},
+        'col': {'span'},
+    }
 
     def _clean(node) -> str:
         if isinstance(node, NavigableString):
@@ -289,7 +295,12 @@ def _clean_table_html(table_elem) -> str:
         if node.name not in ALLOWED:
             return ''.join(_clean(c) for c in node.children)
         inner = ''.join(_clean(c) for c in node.children)
-        return f'<{node.name}>{inner}</{node.name}>'
+        attrs_str = ''
+        for attr in KEEP_ATTRS.get(node.name, set()):
+            val = node.get(attr)
+            if val and str(val) not in ('1', ''):
+                attrs_str += f' {attr}="{val}"'
+        return f'<{node.name}{attrs_str}>{inner}</{node.name}>'
 
     return _clean(table_elem)
 

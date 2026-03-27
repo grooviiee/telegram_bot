@@ -118,7 +118,7 @@ export default function ChatPage({ initialCompany, onSearched }: Props = {}) {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: msg, history: history.slice(0, -1) }),
+          body: JSON.stringify({ message: msg, history: history.slice(0, -1), mode: 'buffett' }),
           signal: AbortSignal.timeout(60_000),
         }
       );
