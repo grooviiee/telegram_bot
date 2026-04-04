@@ -1,19 +1,19 @@
 """주가 기반 밸류에이션 지표 계산 모듈."""
 import xml.etree.ElementTree as ET
 import yfinance as yf
-from services.dart import REPORTS_DIR, fetch_dart_financials, get_corp_code
+from config import REPORTS_DIR, DART_API_KEY, DART_CORP_CODE_URL
+from services.dart import fetch_dart_financials, get_corp_code
 
 
 def get_stock_code(company_name: str) -> str | None:
     """corpCode.xml에서 종목코드(stock_code)를 반환합니다."""
-    import os, zipfile, requests
-    from services.dart import DART_API_KEY, CORP_CODE_URL
+    import os, zipfile, requests, io
 
     corp_code_path = os.path.join(REPORTS_DIR, 'CORPCODE.xml')
     if not os.path.exists(corp_code_path):
-        res = requests.get(CORP_CODE_URL, params={'crtfc_key': DART_API_KEY}, timeout=30)
+        res = requests.get(DART_CORP_CODE_URL, params={'crtfc_key': DART_API_KEY}, timeout=30)
         res.raise_for_status()
-        with zipfile.ZipFile(__import__('io').BytesIO(res.content)) as z:
+        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
             z.extractall(REPORTS_DIR)
 
     root = ET.parse(corp_code_path).getroot()

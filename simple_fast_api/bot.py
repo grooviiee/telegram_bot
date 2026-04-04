@@ -1,7 +1,7 @@
 """
 Telegram 봇 모듈.
 - 커맨드 핸들러: /analysis, /business, /dividend, /profit, /health,
-                 /valuation, /report, /buffett, /chat(/end),
+                 /valuation, /report, /buffett, /score, /chat(/end),
                  /fav_add, /fav_del, /favs
 - 알림 발송: send_daily_notification() (스케줄러에서 호출)
 """
@@ -11,14 +11,16 @@ import re
 import asyncio
 import html
 import aiohttp
-from telegram import Update, Bot
+from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ConversationHandler, ContextTypes, filters,
+    ConversationHandler, ContextTypes, filters, CallbackQueryHandler,
 )
 from telegram.constants import ParseMode
 
 import database
+from config import TELEGRAM_BOT_TOKEN
+from utils import fmt_krw
 
 # -------------------------------------------------------------------
 # 설정
@@ -119,15 +121,9 @@ def _md_to_html(text: str) -> str:
 # -------------------------------------------------------------------
 
 def _fmt_krw(v) -> str:
-    if v is None:
-        return "N/A"
-    abs_v = abs(v)
-    sign = "-" if v < 0 else ""
-    if abs_v >= 1_000_000_000_000:
-        return f"{sign}{abs_v / 1_000_000_000_000:.1f}조"
-    if abs_v >= 100_000_000:
-        return f"{sign}{abs_v / 100_000_000:.0f}억"
-    return f"{sign}{abs_v:,.0f}원"
+    """Telegram 표시용 KRW 포매터 (조/억 단위에서 '원' 생략)."""
+    text = fmt_krw(v)
+    return text.replace("조원", "조").replace("억원", "억")
 
 
 def fmt_dividend(company: str, items: list, cached: bool) -> str:
@@ -260,6 +256,156 @@ def fmt_business_text(company: str, sections: list, cached: bool) -> str:
 
 
 # -------------------------------------------------------------------
+# 유사 기업 추천 (404 처리 공통 헬퍼)
+# -------------------------------------------------------------------
+
+async def _show_suggestions(msg, query: str, cmd: str) -> None:
+    """검색 실패 시 유사 기업명 버튼을 보여줍니다."""
+    from services.dart import search_similar_companies
+    loop = asyncio.get_event_loop()
+    suggestions = await loop.run_in_executor(None, search_similar_companies, query, 8)
+
+    if not suggestions:
+        await msg.edit_text(
+            f"❌ <b>'{_e(query)}'</b> 기업을 찾을 수 없습니다.\n"
+            "회사 정식 명칭으로 다시 시도해 주세요.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # 2열 배치
+    rows = []
+    for i in range(0, len(suggestions), 2):
+        row = [InlineKeyboardButton(suggestions[i], callback_data=f"{cmd}|{suggestions[i]}")]
+        if i + 1 < len(suggestions):
+            row.append(InlineKeyboardButton(suggestions[i + 1], callback_data=f"{cmd}|{suggestions[i + 1]}"))
+        rows.append(row)
+    keyboard = InlineKeyboardMarkup(rows)
+    await msg.edit_text(
+        f"❌ <b>'{_e(query)}'</b> 기업을 찾을 수 없습니다.\n\n"
+        "🔍 혹시 이 기업을 찾으셨나요?",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
+async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """추천 기업 버튼 클릭 시 해당 커맨드를 재실행합니다."""
+    query = update.callback_query
+    await query.answer()
+    cmd, company = query.data.split("|", 1)
+
+    await query.edit_message_text(
+        f"⏳ <i>'{_e(company)}' 검색 중...</i>",
+        parse_mode=ParseMode.HTML,
+    )
+
+    async def edit(text, **kw):
+        await query.edit_message_text(text, parse_mode=ParseMode.HTML, **kw)
+
+    async def send_long(text):
+        await query.delete_message()
+        # update.effective_chat 사용
+        chat_id = update.effective_chat.id
+        chunks = []
+        while len(text) > 4000:
+            split = text.rfind("\n", 0, 4000)
+            if split == -1:
+                split = 4000
+            chunks.append(text[:split])
+            text = text[split:]
+        chunks.append(text)
+        for chunk in chunks:
+            await ctx.bot.send_message(chat_id=chat_id, text=chunk, parse_mode=ParseMode.HTML)
+
+    if cmd == "analysis":
+        data, status = await _get(f"/financials/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        await edit(fmt_analysis(data["company_name"], data["financials"], data.get("cached", False)))
+
+    elif cmd == "business":
+        data, status = await _get(f"/business/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        await edit(fmt_business(data.get("company_name", company), data.get("sections", [])))
+
+    elif cmd == "dividend":
+        data, status = await _get(f"/dividend-data/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        await edit(fmt_dividend(data["company_name"], data["dividend_data"]))
+
+    elif cmd == "profit":
+        data, status = await _get(f"/financials/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        await edit(fmt_profitability(data["company_name"], data["financials"]))
+
+    elif cmd == "health":
+        data, status = await _get(f"/financials/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        await edit(fmt_financial_health(data["company_name"], data["financials"]))
+
+    elif cmd == "valuation":
+        data, status = await _get(f"/valuation/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        text = (
+            f"💹 <b>{_e(data['company_name'])} 밸류에이션</b>\n\n"
+            + _md_to_html(data.get("valuation_text", ""))
+        )
+        await edit(text)
+
+    elif cmd == "score":
+        data, status = await _get(f"/score/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        name = _e(data["company_name"])
+        score = data["total_score"]
+        grade = data["total_grade"]
+        cat_labels = {
+            "growth": "성장성", "profitability": "수익성",
+            "financial_health": "재무건전성", "dividend": "배당",
+            "valuation": "밸류에이션",
+        }
+        lines = [f"📊 <b>{name} 정량 투자 스코어</b>\n", f"<b>종합: {score}점 / 100 ({grade})</b>\n"]
+        for key, cat in data.get("categories", {}).items():
+            bar = "█" * round(cat["score"] / 10) + "░" * (10 - round(cat["score"] / 10))
+            label = cat_labels.get(key, key)
+            lines.append(f"  {label}: {bar} {cat['score']}점 ({cat['grade']})")
+        signals = data.get("key_signals", [])
+        if signals:
+            lines.append("\n<b>핵심 시그널</b>")
+            for s in signals:
+                icon = "🟢" if s["type"] == "positive" else "🔴" if s["type"] == "negative" else "🟡"
+                lines.append(f"  {icon} {s['text']}")
+        await edit("\n".join(lines))
+
+    elif cmd in ("report", "buffett", "insider"):
+        endpoint = {"report": "report", "buffett": "buffett-report", "insider": "insider"}[cmd]
+        data, status = await _get(f"/{endpoint}/{company}")
+        if status != 200:
+            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
+            return
+        if cmd == "report":
+            text = f"🤖 <b>{_e(data['company_name'])} AI 종합 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
+        elif cmd == "buffett":
+            text = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
+        else:
+            text = data.get("message_text", "") + "\n<b>── AI 분석 ──</b>\n" + _md_to_html(data.get("ai_analysis", ""))
+        await send_long(text)
+
+
+# -------------------------------------------------------------------
 # 커맨드 핸들러
 # -------------------------------------------------------------------
 
@@ -277,6 +423,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>── AI 분석 ──</b>\n"
         "🤖 /report [회사명]  — AI 종합 투자 리포트\n"
         "🧙 /buffett [회사명] — 워렌 버핏 스타일 리포트\n"
+        "📊 /score [회사명]   — 정량 투자 스코어 (0~100)\n"
+        "🕵️ /insider [회사명] — 내부자 거래 현황 + AI 분석\n"
         "💬 /chat [회사명]    — AI 상담 시작\n"
         "          /end       — 상담 종료\n\n"
         "<b>── 즐겨찾기 ──</b>\n"
@@ -298,7 +446,7 @@ async def cmd_analysis(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/financials/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "analysis")
         return
     text = fmt_analysis(data["company_name"], data["financials"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -314,7 +462,7 @@ async def cmd_business(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/business-overview/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "business")
         return
     text = fmt_business_text(
         data["company_name"], data.get("sections", []), data.get("cached", False)
@@ -333,7 +481,7 @@ async def cmd_dividend(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/dividend-data/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "dividend")
         return
     text = fmt_dividend(data["company_name"], data["dividend_data"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -349,7 +497,7 @@ async def cmd_profitability(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     )
     data, status = await _get(f"/financials/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "profit")
         return
     text = fmt_profitability(data["company_name"], data["financials"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -365,7 +513,7 @@ async def cmd_financial_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     )
     data, status = await _get(f"/financials/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "health")
         return
     text = fmt_financial_health(data["company_name"], data["financials"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -381,7 +529,7 @@ async def cmd_valuation(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/valuation/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "valuation")
         return
     text = fmt_valuation(data["company_name"], data, data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -398,7 +546,7 @@ async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/report/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "report")
         return
     header = f"🤖 <b>{_e(data['company_name'])} AI 종합 투자 리포트</b>\n\n"
     body = _md_to_html(data.get("report", ""))
@@ -417,12 +565,83 @@ async def cmd_buffett_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     )
     data, status = await _get(f"/buffett-report/{company}")
     if status != 200:
-        await msg.edit_text(f"❌ {_e(data.get('detail', '조회 실패'))}", parse_mode=ParseMode.HTML)
+        await _show_suggestions(msg, company, "buffett")
         return
     header = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n"
     body = _md_to_html(data.get("report", ""))
     await msg.delete()
     await _send_long(update, header + body)
+
+
+# -------------------------------------------------------------------
+# 투자 스코어
+# -------------------------------------------------------------------
+
+async def cmd_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """정량 투자 스코어 조회. /score [회사명]"""
+    if not ctx.args:
+        await update.message.reply_text("사용법: /score [회사명]\n예: /score 삼성전자")
+        return
+    company = " ".join(ctx.args)
+    msg = await update.message.reply_text(
+        f"⏳ <i>'{_e(company)}' 투자 스코어 계산 중...</i>", parse_mode=ParseMode.HTML
+    )
+    data, status = await _get(f"/score/{company}")
+    if status != 200:
+        await _show_suggestions(msg, company, "score")
+        return
+
+    name = _e(data["company_name"])
+    score = data["total_score"]
+    grade = data["total_grade"]
+
+    cat_labels = {
+        "growth": "성장성", "profitability": "수익성",
+        "financial_health": "재무건전성", "dividend": "배당",
+        "valuation": "밸류에이션",
+    }
+    lines = [f"📊 <b>{name} 정량 투자 스코어</b>\n"]
+    lines.append(f"<b>종합: {score}점 / 100 ({grade})</b>\n")
+
+    for key, cat in data.get("categories", {}).items():
+        bar = "█" * round(cat["score"] / 10) + "░" * (10 - round(cat["score"] / 10))
+        label = cat_labels.get(key, key)
+        lines.append(f"  {label}: {bar} {cat['score']}점 ({cat['grade']})")
+
+    signals = data.get("key_signals", [])
+    if signals:
+        lines.append("\n<b>핵심 시그널</b>")
+        for s in signals:
+            icon = "🟢" if s["type"] == "positive" else "🔴" if s["type"] == "negative" else "🟡"
+            lines.append(f"  {icon} {s['text']}")
+
+    await msg.edit_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+# -------------------------------------------------------------------
+# 내부자 거래 현황
+# -------------------------------------------------------------------
+
+async def cmd_insider(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """임원/주요주주 내부자 거래 현황 조회. /insider [회사명]"""
+    if not ctx.args:
+        await update.message.reply_text("사용법: /insider [회사명]\n예: /insider 삼성전자")
+        return
+    company = " ".join(ctx.args)
+    msg = await update.message.reply_text(
+        f"⏳ <i>'{_e(company)}' 내부자 거래 분석 중...</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    data, status = await _get(f"/insider/{company}")
+    if status != 200:
+        await _show_suggestions(msg, company, "insider")
+        return
+
+    message_text = data.get("message_text", "")
+    ai_analysis = _md_to_html(data.get("ai_analysis", ""))
+
+    await msg.delete()
+    await _send_long(update, message_text + "\n<b>── AI 분석 ──</b>\n" + ai_analysis)
 
 
 # -------------------------------------------------------------------
@@ -601,6 +820,62 @@ async def _build_user_message(user_id: int, items: list) -> tuple[int, str | Non
     return user_id, None
 
 
+async def send_filing_alerts(bot: Bot) -> None:
+    """즐겨찾기 종목의 새 공시를 감지하여 사용자에게 알림을 발송합니다."""
+    from services.dart import get_corp_code
+    from services.filing_alert import check_new_filings, build_filing_alert_message
+    from fastapi import HTTPException
+
+    watched = await database.get_all_watched_companies()
+    if not watched:
+        return
+
+    print(f"[공시알림] {len(watched)}개 종목 공시 체크 시작")
+
+    for item in watched:
+        company = item["company"]
+        try:
+            corp_code = get_corp_code(company)
+        except HTTPException:
+            print(f"[공시알림] {company} 회사코드 조회 실패, 건너뜀")
+            continue
+        except Exception as e:
+            print(f"[공시알림] {company} 회사코드 오류: {e}")
+            continue
+
+        try:
+            new_filings = await check_new_filings(corp_code, company)
+        except Exception as e:
+            print(f"[공시알림] {company} 공시 체크 오류: {e}")
+            continue
+
+        if not new_filings:
+            continue
+
+        user_ids = await database.get_users_watching_company(company)
+        print(f"[공시알림] {company} 새 공시 {len(new_filings)}건 → {len(user_ids)}명에게 발송")
+
+        for filing in new_filings:
+            try:
+                text = await build_filing_alert_message(company, filing)
+            except Exception as e:
+                print(f"[공시알림] {company} 메시지 생성 오류: {e}")
+                continue
+
+            for user_id in user_ids:
+                try:
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True,
+                    )
+                except Exception as e:
+                    print(f"[공시알림] user {user_id} 발송 오류: {e}")
+
+    print("[공시알림] 공시 체크 완료")
+
+
 async def send_daily_notification(bot: Bot) -> None:
     grouped = await database.get_all_favorites_grouped()
     if not grouped:
@@ -627,7 +902,7 @@ async def send_daily_notification(bot: Bot) -> None:
 # -------------------------------------------------------------------
 
 def create_bot_application() -> Application:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    token = TELEGRAM_BOT_TOKEN
     if not token:
         raise ValueError("TELEGRAM_BOT_TOKEN 환경변수가 설정되지 않았습니다.")
 
@@ -660,10 +935,33 @@ def create_bot_application() -> Application:
     # AI 분석
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("buffett",   cmd_buffett_report))
+    app.add_handler(CommandHandler("score",     cmd_score))
+    app.add_handler(CommandHandler("insider",   cmd_insider))
 
     # 즐겨찾기
     app.add_handler(CommandHandler("fav_add",   cmd_add_favorite))
     app.add_handler(CommandHandler("fav_del",   cmd_remove_favorite))
     app.add_handler(CommandHandler("favs",      cmd_list_favorites))
+
+    # 유사 기업 추천 버튼 콜백
+    app.add_handler(CallbackQueryHandler(handle_suggest_callback))
+
+    # help 텍스트 입력 시 도움말
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^help$"), cmd_start))
+
+    # 이스터에그
+    async def _easter_egg(u, c):
+        import random
+        if random.random() < 0.05:
+            await u.message.reply_text("😤 싫어요!")
+        else:
+            await u.message.reply_text(random.choice([
+                "🐰 통통이 메롱~",
+                "😏 조치~",
+                "😊 좋지~~",
+                "🥰 좋지요~",
+                "😄 조치~~ ^___^",
+            ]))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^ㅅㅅ$"), _easter_egg))
 
     return app

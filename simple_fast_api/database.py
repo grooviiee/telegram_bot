@@ -22,6 +22,15 @@ async def init_db() -> None:
                 UNIQUE(user_id, company, analysis_type)
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS filing_watch (
+                corp_code    TEXT PRIMARY KEY,
+                company_name TEXT NOT NULL,
+                last_rcept_no TEXT,
+                last_rcept_dt TEXT,
+                updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
     print(f"[DB] 초기화 완료: {DB_PATH}")
 
@@ -57,6 +66,57 @@ async def get_user_favorites(user_id: int) -> list[dict]:
         )
         rows = await cursor.fetchall()
     return [{"company": r[0], "analysis_type": r[1]} for r in rows]
+
+
+async def get_all_watched_companies() -> list[dict]:
+    """즐겨찾기에 등록된 고유 종목 목록 반환 (공시 감지용)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT DISTINCT company FROM favorites ORDER BY company"
+        )
+        rows = await cursor.fetchall()
+    return [{"company": r[0]} for r in rows]
+
+
+async def get_users_watching_company(company_name: str) -> list[int]:
+    """특정 종목을 즐겨찾기한 모든 user_id 반환."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT DISTINCT user_id FROM favorites WHERE company=?",
+            (company_name,),
+        )
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
+
+
+async def get_filing_watch(corp_code: str) -> dict | None:
+    """종목의 마지막 공시 정보 반환."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT corp_code, company_name, last_rcept_no, last_rcept_dt FROM filing_watch WHERE corp_code=?",
+            (corp_code,),
+        )
+        row = await cursor.fetchone()
+    if not row:
+        return None
+    return {"corp_code": row[0], "company_name": row[1], "last_rcept_no": row[2], "last_rcept_dt": row[3]}
+
+
+async def update_filing_watch(corp_code: str, company_name: str, last_rcept_no: str, last_rcept_dt: str) -> None:
+    """종목의 마지막 공시 정보 갱신 (없으면 삽입)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO filing_watch (corp_code, company_name, last_rcept_no, last_rcept_dt, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(corp_code) DO UPDATE SET
+                last_rcept_no = excluded.last_rcept_no,
+                last_rcept_dt = excluded.last_rcept_dt,
+                updated_at    = CURRENT_TIMESTAMP
+            """,
+            (corp_code, company_name, last_rcept_no, last_rcept_dt),
+        )
+        await db.commit()
 
 
 async def get_all_favorites_grouped() -> dict[int, list[tuple[str, str]]]:
