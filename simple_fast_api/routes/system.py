@@ -42,6 +42,9 @@ async def cache_clear(company_name: str = None):
             financials_cache.clear(company_name),
             dividend_json_cache.clear(company_name),
             business_cache.clear(company_name),
+            quarterly_financials_cache.clear(company_name),
+            quarterly_dividend_cache.clear(company_name),
+            valuation_cache.clear(company_name),
             report_cache.clear(company_name),
             buffett_report_cache.clear(company_name),
         ])
@@ -53,6 +56,9 @@ async def cache_clear(company_name: str = None):
         financials_cache.clear()
         dividend_json_cache.clear()
         business_cache.clear()
+        quarterly_financials_cache.clear()
+        quarterly_dividend_cache.clear()
+        valuation_cache.clear()
         report_cache.clear()
         buffett_report_cache.clear()
         return {"message": "전체 캐시가 삭제되었습니다."}

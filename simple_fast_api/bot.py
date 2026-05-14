@@ -326,32 +326,32 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await edit(fmt_analysis(data["company_name"], data["financials"], data.get("cached", False)))
 
     elif cmd == "business":
-        data, status = await _get(f"/business/{company}")
+        data, status = await _get(f"/business-overview/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
-        await edit(fmt_business(data.get("company_name", company), data.get("sections", [])))
+        await edit(fmt_business_text(data.get("company_name", company), data.get("sections", []), data.get("cached", False)))
 
     elif cmd == "dividend":
         data, status = await _get(f"/dividend-data/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
-        await edit(fmt_dividend(data["company_name"], data["dividend_data"]))
+        await edit(fmt_dividend(data["company_name"], data["dividend_data"], data.get("cached", False)))
 
     elif cmd == "profit":
         data, status = await _get(f"/financials/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
-        await edit(fmt_profitability(data["company_name"], data["financials"]))
+        await edit(fmt_profitability(data["company_name"], data["financials"], data.get("cached", False)))
 
     elif cmd == "health":
         data, status = await _get(f"/financials/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
-        await edit(fmt_financial_health(data["company_name"], data["financials"]))
+        await edit(fmt_financial_health(data["company_name"], data["financials"], data.get("cached", False)))
 
     elif cmd == "valuation":
         data, status = await _get(f"/valuation/{company}")
