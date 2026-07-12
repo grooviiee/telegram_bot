@@ -11,6 +11,7 @@ import FinancialHealthPage from './financial-health/page';
 import FavoritesPage from './favorites/page';
 import ValuationPage from './valuation/page';
 import ReportPage from './report/page';
+import BuffettPage from './buffett/page';
 import ChatPage from './chat/page';
 
 const STORAGE_KEY = 'dart_favorites';
@@ -72,6 +73,7 @@ export function InteractiveLayout() {
       case 'profitability':    return <ProfitabilityPage {...sharedProps} />;
       case 'financial-health': return <FinancialHealthPage {...sharedProps} />;
       case 'valuation':        return <ValuationPage {...sharedProps} />;
+      case 'buffett':          return <BuffettPage {...sharedProps} />;
       case 'report':           return <ReportPage {...sharedProps} />;
       case 'chat':             return <ChatPage initialCompany={pendingSearch?.page === 'chat' ? pendingSearch.company : undefined} onSearched={onSearched} />;
       case 'favorites':        return <FavoritesPage favorites={favorites} toggleFavorite={toggleFavorite} onFavoriteClick={handleFavoriteClick} />;
