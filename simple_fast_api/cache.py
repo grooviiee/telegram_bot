@@ -1,4 +1,9 @@
-"""파일 기반 LRU 캐시 — 서버 재시작 후에도 캐시 유지."""
+"""파일 기반 LRU 캐시 — 서버 재시작 후에도 캐시 유지.
+
+diskcache는 디스크(SQLite) I/O이므로, 이벤트 루프를 막지 않도록
+모든 공개 메서드는 asyncio.to_thread로 별도 스레드에서 실행한다.
+"""
+import asyncio
 import os
 import diskcache
 
@@ -14,7 +19,7 @@ class DiskCache:
     def _set_order(self, order: list) -> None:
         self._cache.set(self._order_key, order)
 
-    def get(self, key: str):
+    def _get_sync(self, key: str):
         value = self._cache.get(key)
         if value is None:
             return None
@@ -25,7 +30,7 @@ class DiskCache:
             self._set_order(order)
         return value
 
-    def set(self, key: str, value) -> None:
+    def _set_sync(self, key: str, value) -> None:
         order = self._get_order()
         if key in order:
             order.remove(key)
@@ -37,7 +42,7 @@ class DiskCache:
         self._set_order(order)
         self._cache.set(key, value)
 
-    def clear(self, key: str = None):
+    def _clear_sync(self, key: str = None):
         if key:
             order = self._get_order()
             if key not in order:
@@ -50,9 +55,21 @@ class DiskCache:
             self._cache.clear()
             return True
 
-    def info(self) -> dict:
+    def _info_sync(self) -> dict:
         order = self._get_order()
         return {"size": len(order), "max_size": self.max_size, "keys": order}
+
+    async def get(self, key: str):
+        return await asyncio.to_thread(self._get_sync, key)
+
+    async def set(self, key: str, value) -> None:
+        await asyncio.to_thread(self._set_sync, key, value)
+
+    async def clear(self, key: str = None):
+        return await asyncio.to_thread(self._clear_sync, key)
+
+    async def info(self) -> dict:
+        return await asyncio.to_thread(self._info_sync)
 
 
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")

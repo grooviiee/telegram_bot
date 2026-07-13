@@ -49,15 +49,15 @@ async def _gather_company_data(corp_code: str, company_name: str) -> dict:
         'business_sections': biz_result.get('sections', []) if isinstance(biz_result, dict) else [],
         'recent_filings': filings if isinstance(filings, list) else [],
         'financials': [f for f in (fin_all if isinstance(fin_all, (list, tuple)) else []) if isinstance(f, dict)],
-        'dividends': (dividend_cache.get(company_name) or {}).get('dividend_data', []),
-        'valuation': valuation_cache.get(company_name),
+        'dividends': (await dividend_cache.get(company_name) or {}).get('dividend_data', []),
+        'valuation': await valuation_cache.get(company_name),
     }
 
 
 @router.get("/report/{company_name}")
 async def get_report(company_name: str):
     """Gemini AI를 이용해 종합 투자 리포트를 생성합니다."""
-    cached = report_cache.get(company_name)
+    cached = await report_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -70,14 +70,14 @@ async def get_report(company_name: str):
     )
 
     result = {'company_name': company_name, 'report': report_text}
-    report_cache.set(company_name, result)
+    await report_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/buffett-report/{company_name}")
 async def get_buffett_report(company_name: str):
     """워렌 버핏 투자 철학을 적용한 종합 투자 리포트를 생성합니다."""
-    cached = buffett_report_cache.get(company_name)
+    cached = await buffett_report_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -90,7 +90,7 @@ async def get_buffett_report(company_name: str):
     )
 
     result = {'company_name': company_name, 'report': report_text, 'mode': 'buffett'}
-    buffett_report_cache.set(company_name, result)
+    await buffett_report_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
@@ -107,8 +107,8 @@ async def chat(company_name: str, req: ChatRequest):
     current_year = datetime.now().year
 
     # 캐시 우선 사용
-    biz_cached = business_cache.get(company_name)
-    fin_cached = financials_cache.get(company_name)
+    biz_cached = await business_cache.get(company_name)
+    fin_cached = await financials_cache.get(company_name)
 
     tasks = []
     need_biz = biz_cached is None
@@ -137,8 +137,8 @@ async def chat(company_name: str, req: ChatRequest):
 
     business_sections = (biz_cached or {}).get('sections', [])
     financials = (fin_cached or {}).get('financials', [])
-    dividends = (dividend_cache.get(company_name) or {}).get('dividend_data', [])
-    valuation = valuation_cache.get(company_name)
+    dividends = (await dividend_cache.get(company_name) or {}).get('dividend_data', [])
+    valuation = await valuation_cache.get(company_name)
 
     buffett_mode = req.mode == "buffett"
     system_context = build_system_context(
@@ -160,7 +160,7 @@ async def chat(company_name: str, req: ChatRequest):
 @router.get("/insider/{company_name}")
 async def get_insider_trading(company_name: str):
     """임원/주요주주 내부자 거래 현황 및 AI 분석을 반환합니다."""
-    corp_code = get_corp_code(company_name)
+    corp_code = await asyncio.to_thread(get_corp_code, company_name)
     year = str(datetime.now().year - 1)
 
     raw = await asyncio.to_thread(fetch_insider_trading, corp_code, year)

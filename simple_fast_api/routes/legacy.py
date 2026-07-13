@@ -144,7 +144,7 @@ def create_dividend_graph(dividend_data: list, company_name: str) -> str | None:
 @router.get("/analyze-dividends-json/{company_name}")
 async def analyze_dividends_json(company_name: str):
     """다운로드된 보고서를 Gemini API로 분석하여 분기별 배당금 데이터를 반환합니다."""
-    cached = dividend_json_cache.get(company_name)
+    cached = await dividend_json_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -183,7 +183,7 @@ async def analyze_dividends_json(company_name: str):
 
     dividend_data.sort(key=lambda x: (x['year'], ['Q1', 'Q2', 'Q3', 'Q4'].index(x['quarter'])))
     result = {'company_name': company_name, 'dividend_data': dividend_data}
-    dividend_json_cache.set(company_name, result)
+    await dividend_json_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 

@@ -35,7 +35,7 @@ async def trigger_download(request: CompanyRequest, background_tasks: Background
 @router.get("/dividend-data/{company_name}")
 async def get_dividend_data(company_name: str):
     """최근 5년간 주당 현금배당금을 조회합니다."""
-    cached = dividend_cache.get(company_name)
+    cached = await dividend_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -61,14 +61,14 @@ async def get_dividend_data(company_name: str):
 
     dividend_data.sort(key=lambda x: x['year'])
     result = {'company_name': company_name, 'dividend_data': dividend_data}
-    dividend_cache.set(company_name, result)
+    await dividend_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/financials/{company_name}")
 async def get_financials(company_name: str):
     """최근 5년간 수익성·성장성·재무건전성 지표를 조회합니다."""
-    cached = financials_cache.get(company_name)
+    cached = await financials_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -87,28 +87,28 @@ async def get_financials(company_name: str):
 
     financials.sort(key=lambda x: x['year'])
     result = {'company_name': company_name, 'financials': financials}
-    financials_cache.set(company_name, result)
+    await financials_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/business-overview/{company_name}")
 async def get_business_overview(company_name: str):
     """최신 사업보고서의 '사업의 내용' 1~4항을 반환합니다."""
-    cached = business_cache.get(company_name)
+    cached = await business_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
     corp_code = await asyncio.to_thread(get_corp_code, company_name)
     result = await asyncio.to_thread(fetch_business_overview, corp_code, company_name)
 
-    business_cache.set(company_name, result)
+    await business_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/financials-quarterly/{company_name}")
 async def get_financials_quarterly(company_name: str):
     """최근 5개년 분기별 재무 지표를 조회합니다."""
-    cached = quarterly_financials_cache.get(company_name)
+    cached = await quarterly_financials_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -132,14 +132,14 @@ async def get_financials_quarterly(company_name: str):
 
     financials.sort(key=lambda x: (x['year'], x.get('quarter', 'Q4')))
     result = {'company_name': company_name, 'period': 'quarterly', 'financials': financials}
-    quarterly_financials_cache.set(company_name, result)
+    await quarterly_financials_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/dividend-data-quarterly/{company_name}")
 async def get_dividend_data_quarterly(company_name: str):
     """최근 5개년 분기별 배당금을 조회합니다."""
-    cached = quarterly_dividend_cache.get(company_name)
+    cached = await quarterly_dividend_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
@@ -168,17 +168,17 @@ async def get_dividend_data_quarterly(company_name: str):
 
     dividend_data.sort(key=lambda x: (x['year'], x['quarter']))
     result = {'company_name': company_name, 'period': 'quarterly', 'dividend_data': dividend_data}
-    quarterly_dividend_cache.set(company_name, result)
+    await quarterly_dividend_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/valuation/{company_name}")
 async def get_valuation_endpoint(company_name: str):
     """현재 주가 기반 밸류에이션 지표를 반환합니다."""
-    cached = valuation_cache.get(company_name)
+    cached = await valuation_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
     result = await asyncio.to_thread(fetch_valuation, company_name)
-    valuation_cache.set(company_name, result)
+    await valuation_cache.set(company_name, result)
     return JSONResponse(content={**result, 'cached': False})
