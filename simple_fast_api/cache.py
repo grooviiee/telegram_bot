@@ -82,3 +82,4 @@ quarterly_dividend_cache   = DiskCache(os.path.join(_CACHE_DIR, "quarterly_divid
 valuation_cache            = DiskCache(os.path.join(_CACHE_DIR, "valuation"),            max_size=20)
 report_cache               = DiskCache(os.path.join(_CACHE_DIR, "report"),               max_size=10)
 buffett_report_cache       = DiskCache(os.path.join(_CACHE_DIR, "buffett_report"),       max_size=10)
+events_cache               = DiskCache(os.path.join(_CACHE_DIR, "events"),               max_size=10)

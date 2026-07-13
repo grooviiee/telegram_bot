@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { key: 'buffett',          label: '🧙 버핏 리포트' },
   { key: 'report',           label: 'AI 리포트' },
   { key: 'chat',             label: 'AI 상담' },
+  { key: 'events',           label: '📌 주가 이벤트' },
 ];
 
 export function Header({ activePage, setActivePage, favoriteCount = 0 }) {

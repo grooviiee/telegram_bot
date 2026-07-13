@@ -9,7 +9,7 @@ from pydantic import BaseModel
 import database
 from cache import (
     dividend_cache, financials_cache, business_cache,
-    valuation_cache, report_cache, buffett_report_cache,
+    valuation_cache, report_cache, buffett_report_cache, events_cache,
 )
 from services.dart import (
     resolve_corp_code, fetch_dart_financials, fetch_business_overview,
@@ -19,6 +19,7 @@ from services.report import generate_report, generate_buffett_report
 from services.chat import build_system_context, chat_with_gemini, create_tool_executor
 from services.insider import summarize_insider_data, build_insider_text, analyze_insider_with_gemini
 from services.scoring import compute_investment_score
+from services.events import analyze_price_events
 
 router = APIRouter()
 
@@ -230,3 +231,16 @@ async def get_investment_score(company_name: str):
         "categories": score_data['categories'],
         "key_signals": signals,
     }
+
+
+@router.get("/events/{company_name}")
+async def get_price_events(company_name: str):
+    """최근 1년간 주가 변곡점과 그 원인이 된 사건을 분석합니다."""
+    await database.record_search(company_name)
+    cached = await events_cache.get(company_name)
+    if cached is not None:
+        return JSONResponse(content={**cached, 'cached': True})
+
+    result = await analyze_price_events(company_name)
+    await events_cache.set(company_name, result)
+    return JSONResponse(content={**result, 'cached': False})

@@ -100,6 +100,59 @@ async def call_gemini(
         return "(AI 응답 생성 실패)"
 
 
+async def call_gemini_with_search(
+    prompt: str,
+    *,
+    system_instruction: str | None = None,
+    generation_config: dict | None = None,
+    timeout: int = 60,
+) -> dict:
+    """Google Search grounding을 사용해 Gemini를 호출합니다.
+
+    Returns:
+        {"text": str, "sources": [{"title": str, "url": str}, ...]}
+    """
+    if generation_config is None:
+        generation_config = GEMINI_SUMMARY_CONFIG
+
+    payload: dict = {
+        "generationConfig": generation_config,
+        "tools": [{"google_search": {}}],
+        "contents": [{"parts": [{"text": prompt}]}],
+    }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                GEMINI_URL,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as res:
+                if res.status != 200:
+                    error_body = await res.text()
+                    print(f"[Gemini Search] API Error status={res.status}, body={error_body[:500]}")
+                    return {"text": "(AI 응답 생성 실패)", "sources": []}
+                data = await res.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    print(f"[Gemini Search] No candidates returned: {data}")
+                    return {"text": "(AI 응답 생성 실패)", "sources": []}
+
+                text = _extract_text_from_candidates(candidates)
+                grounding = candidates[0].get("groundingMetadata", {}) or {}
+                sources = []
+                for chunk in grounding.get("groundingChunks", []) or []:
+                    web = chunk.get("web") or {}
+                    if web.get("uri"):
+                        sources.append({"title": web.get("title", ""), "url": web["uri"]})
+                return {"text": text, "sources": sources}
+    except Exception as e:
+        print(f"[Gemini Search] 호출 오류: {e}")
+        return {"text": "(AI 응답 생성 실패)", "sources": []}
+
+
 async def call_gemini_with_tools(
     *,
     system_instruction: str,
