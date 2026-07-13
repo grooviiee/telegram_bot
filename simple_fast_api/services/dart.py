@@ -1,5 +1,5 @@
 """DART Open API 호출 전용 헬퍼 함수."""
-import io, re, zipfile, requests
+import asyncio, io, re, zipfile, requests
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from bs4 import BeautifulSoup
@@ -264,6 +264,11 @@ def get_corp_code(company_name: str) -> str:
         return partial[0][0]
 
     raise HTTPException(status_code=404, detail=f"'{company_name}' 회사 코드를 찾을 수 없음.")
+
+
+async def resolve_corp_code(company_name: str) -> str:
+    """get_corp_code(동기, XML 파싱)를 이벤트 루프를 막지 않고 실행한다."""
+    return await asyncio.to_thread(get_corp_code, company_name)
 
 
 def search_similar_companies(query: str, max_results: int = 5) -> list[str]:

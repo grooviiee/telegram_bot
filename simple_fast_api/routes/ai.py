@@ -6,12 +6,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import database
 from cache import (
     dividend_cache, financials_cache, business_cache,
     valuation_cache, report_cache, buffett_report_cache,
 )
 from services.dart import (
-    get_corp_code, fetch_dart_financials, fetch_business_overview,
+    resolve_corp_code, fetch_dart_financials, fetch_business_overview,
     fetch_filing_list, fetch_insider_trading,
 )
 from services.report import generate_report, generate_buffett_report
@@ -57,11 +58,12 @@ async def _gather_company_data(corp_code: str, company_name: str) -> dict:
 @router.get("/report/{company_name}")
 async def get_report(company_name: str):
     """Gemini AI를 이용해 종합 투자 리포트를 생성합니다."""
+    await database.record_search(company_name)
     cached = await report_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     data = await _gather_company_data(corp_code, company_name)
 
     report_text = await generate_report(
@@ -77,11 +79,12 @@ async def get_report(company_name: str):
 @router.get("/buffett-report/{company_name}")
 async def get_buffett_report(company_name: str):
     """워렌 버핏 투자 철학을 적용한 종합 투자 리포트를 생성합니다."""
+    await database.record_search(company_name)
     cached = await buffett_report_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     data = await _gather_company_data(corp_code, company_name)
 
     report_text = await generate_buffett_report(
@@ -103,7 +106,8 @@ class ChatRequest(BaseModel):
 @router.post("/chat/{company_name}")
 async def chat(company_name: str, req: ChatRequest):
     """공시 데이터를 컨텍스트로 Gemini AI와 멀티턴 상담을 수행합니다."""
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    await database.record_search(company_name)
+    corp_code = await resolve_corp_code(company_name)
     current_year = datetime.now().year
 
     # 캐시 우선 사용
@@ -160,7 +164,8 @@ async def chat(company_name: str, req: ChatRequest):
 @router.get("/insider/{company_name}")
 async def get_insider_trading(company_name: str):
     """임원/주요주주 내부자 거래 현황 및 AI 분석을 반환합니다."""
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    await database.record_search(company_name)
+    corp_code = await resolve_corp_code(company_name)
     year = str(datetime.now().year - 1)
 
     raw = await asyncio.to_thread(fetch_insider_trading, corp_code, year)
@@ -188,7 +193,8 @@ async def get_insider_trading(company_name: str):
 @router.get("/score/{company_name}")
 async def get_investment_score(company_name: str):
     """정량 투자 스코어를 계산하여 반환합니다."""
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    await database.record_search(company_name)
+    corp_code = await resolve_corp_code(company_name)
     data = await _gather_company_data(corp_code, company_name)
 
     score_data = compute_investment_score(

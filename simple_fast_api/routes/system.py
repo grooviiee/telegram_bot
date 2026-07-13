@@ -6,12 +6,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from telegram import Update
 
+import database
 from config import WEBHOOK_SECRET_TOKEN
 from cache import (
     dividend_cache, financials_cache, dividend_json_cache, business_cache,
     quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
     report_cache, buffett_report_cache,
 )
+from services.cache_warmup import warm_popular_companies, TOP_N
 
 router = APIRouter()
 
@@ -49,6 +51,20 @@ async def cache_clear(company_name: str = None):
     else:
         await asyncio.gather(*[c.clear() for c in caches])
         return {"message": "전체 캐시가 삭제되었습니다."}
+
+
+@router.get("/cache/popular")
+async def popular_companies():
+    """검색 횟수 상위 종목 목록을 반환합니다 (캐시 워밍업 대상 확인용)."""
+    companies = await database.get_top_searched_companies(TOP_N)
+    return {"top_n": TOP_N, "companies": companies}
+
+
+@router.post("/cache/warmup")
+async def trigger_cache_warmup():
+    """인기 종목 캐시 워밍업을 즉시 실행합니다 (평소엔 매일 05:30 KST 자동 실행)."""
+    await warm_popular_companies()
+    return {"message": "캐시 워밍업이 완료되었습니다."}
 
 
 @router.post("/webhook", include_in_schema=False)

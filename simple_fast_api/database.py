@@ -31,8 +31,42 @@ async def init_db() -> None:
                 updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS search_stats (
+                company          TEXT PRIMARY KEY,
+                search_count     INTEGER NOT NULL DEFAULT 0,
+                last_searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         await db.commit()
     print(f"[DB] 초기화 완료: {DB_PATH}")
+
+
+async def record_search(company: str) -> None:
+    """종목 검색 횟수를 1 증가시킵니다 (인기 종목 캐시 워밍업에 사용)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO search_stats (company, search_count, last_searched_at)
+            VALUES (?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(company) DO UPDATE SET
+                search_count     = search_count + 1,
+                last_searched_at = CURRENT_TIMESTAMP
+            """,
+            (company,),
+        )
+        await db.commit()
+
+
+async def get_top_searched_companies(limit: int = 20) -> list[str]:
+    """검색 횟수 상위 N개 종목명을 반환합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT company FROM search_stats ORDER BY search_count DESC, last_searched_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+    return [r[0] for r in rows]
 
 
 async def add_favorite(user_id: int, username: str, company: str, analysis_type: str) -> bool:

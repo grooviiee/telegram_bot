@@ -6,12 +6,13 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import database
 from cache import (
     dividend_cache, financials_cache, business_cache,
     quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
 )
 from services.dart import (
-    get_corp_code, fetch_dart_financials, fetch_dividend_per_share,
+    get_corp_code, resolve_corp_code, fetch_dart_financials, fetch_dividend_per_share,
     fetch_dart_financials_q, fetch_dividend_per_share_q,
     fetch_business_overview, download_reports_logic,
 )
@@ -35,11 +36,12 @@ async def trigger_download(request: CompanyRequest, background_tasks: Background
 @router.get("/dividend-data/{company_name}")
 async def get_dividend_data(company_name: str):
     """최근 5년간 주당 현금배당금을 조회합니다."""
+    await database.record_search(company_name)
     cached = await dividend_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     current_year = datetime.now().year
     candidate_years = [str(current_year - i) for i in range(1, 7)]
 
@@ -68,11 +70,12 @@ async def get_dividend_data(company_name: str):
 @router.get("/financials/{company_name}")
 async def get_financials(company_name: str):
     """최근 5년간 수익성·성장성·재무건전성 지표를 조회합니다."""
+    await database.record_search(company_name)
     cached = await financials_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     current_year = datetime.now().year
     candidate_years = [str(current_year - i) for i in range(1, 7)]
 
@@ -94,11 +97,12 @@ async def get_financials(company_name: str):
 @router.get("/business-overview/{company_name}")
 async def get_business_overview(company_name: str):
     """최신 사업보고서의 '사업의 내용' 1~4항을 반환합니다."""
+    await database.record_search(company_name)
     cached = await business_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     result = await asyncio.to_thread(fetch_business_overview, corp_code, company_name)
 
     await business_cache.set(company_name, result)
@@ -108,11 +112,12 @@ async def get_business_overview(company_name: str):
 @router.get("/financials-quarterly/{company_name}")
 async def get_financials_quarterly(company_name: str):
     """최근 5개년 분기별 재무 지표를 조회합니다."""
+    await database.record_search(company_name)
     cached = await quarterly_financials_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     current_year = datetime.now().year
     targets = [
         (str(current_year - i), q)
@@ -139,11 +144,12 @@ async def get_financials_quarterly(company_name: str):
 @router.get("/dividend-data-quarterly/{company_name}")
 async def get_dividend_data_quarterly(company_name: str):
     """최근 5개년 분기별 배당금을 조회합니다."""
+    await database.record_search(company_name)
     cached = await quarterly_dividend_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})
 
-    corp_code = await asyncio.to_thread(get_corp_code, company_name)
+    corp_code = await resolve_corp_code(company_name)
     current_year = datetime.now().year
     targets = [
         (str(current_year - i), q)
@@ -175,6 +181,7 @@ async def get_dividend_data_quarterly(company_name: str):
 @router.get("/valuation/{company_name}")
 async def get_valuation_endpoint(company_name: str):
     """현재 주가 기반 밸류에이션 지표를 반환합니다."""
+    await database.record_search(company_name)
     cached = await valuation_cache.get(company_name)
     if cached is not None:
         return JSONResponse(content={**cached, 'cached': True})

@@ -13,6 +13,7 @@ import matplotlib.font_manager as fm
 from config import DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN
 import database
 import bot as telegram_bot
+from services.cache_warmup import warm_popular_companies
 from routes.data import router as data_router
 from routes.ai import router as ai_router
 from routes.legacy import router as legacy_router
@@ -65,8 +66,14 @@ async def lifespan(app: FastAPI):
             id="filing_alerts",
             replace_existing=True,
         )
+        scheduler.add_job(
+            warm_popular_companies,
+            CronTrigger(hour=5, minute=30),
+            id="cache_warmup",
+            replace_existing=True,
+        )
         scheduler.start()
-        print("[Scheduler] 일일 알림 (09:00 KST) + 공시 감지 (30분) 등록 완료")
+        print("[Scheduler] 일일 알림 (09:00 KST) + 공시 감지 (30분) + 인기 종목 캐시 워밍업 (05:30 KST) 등록 완료")
     else:
         print("[Bot] TELEGRAM_BOT_TOKEN 미설정 — 봇 기능 비활성화")
 
