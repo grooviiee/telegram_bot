@@ -1,33 +1,56 @@
 """주가 변곡점 이벤트 분석.
 
-yfinance 일별 종가에서 단기간 급등락 구간(변곡점)을 찾아내고,
-Google Search grounding을 지원하는 Gemini로 그 구간의 실제 원인 사건을
-조사한다. '주가가 몇 % 올랐다/내렸다'는 결과 보도 자체는 원인으로 치지
-않도록 프롬프트에서 명시적으로 배제한다.
+과거에는 yfinance 급등락 구간을 먼저 찾고 그 원인을 역추적했지만, 이 방식은
+"주가는 크게 안 움직였지만 밸류에이션·투자 내러티브 관점에서는 중요한 사건"을
+놓친다. 그래서 지금은 순서를 뒤집는다:
+
+1. 발견(discovery) — Gemini + Google Search grounding으로 최근 1년간
+   밸류에이션/내러티브에 유의미한 사건을 먼저 찾는다. 주가 변동 여부는
+   조건이 아니다.
+2. 검증(verify) — 각 사건을 개별적으로 다시 검색해 사실 확인 + 출처를 확보한다.
+3. 가격 컨텍스트 — 이벤트 날짜 전후 등락률은 참고 정보로만 계산해 붙인다
+   (필터링이나 정렬 기준으로 쓰지 않는다).
 """
 import json
 import re
 
 import yfinance as yf
 
-from config import GEMINI_EVENT_CONFIG
+from config import GEMINI_EVENT_CONFIG, GEMINI_EVENT_DISCOVERY_CONFIG
 from services.valuation import get_stock_code
 from utils import call_gemini_with_search
 
-WINDOW_DAYS = 5
-THRESHOLD_PCT = 5.0
 MAX_EVENTS = 8
+PRICE_WINDOW_BEFORE = 1  # 이벤트 날짜 기준 참고용 가격 변동 계산 구간(거래일)
+PRICE_WINDOW_AFTER = 3
 
-EVENT_SYSTEM_INSTRUCTION = """당신은 한국 주식시장을 분석하는 애널리스트입니다.
-특정 종목의 주가가 특정 기간 동안 크게 움직인 원인을 웹 검색으로 조사합니다.
+CATEGORY_OPTIONS = "실적/밸류에이션/산업뉴스/규제/공급망/경쟁사/신사업/기타"
+
+DISCOVERY_SYSTEM_INSTRUCTION = f"""당신은 한국 주식시장을 분석하는 애널리스트입니다.
+특정 종목에 대해 최근 1년간 있었던 사건 중, 기업의 밸류에이션(실적, 이익률, 성장성,
+시장점유율, 신규 수주·계약 등)이나 투자 내러티브(산업 트렌드에서의 포지셔닝, 신사업,
+경쟁 구도, 리스크 등)에 유의미한 영향을 줄 만한 사건을 찾아 나열하세요.
 
 규칙:
-- 실적 발표, 산업/경쟁사 뉴스, 규제·정책, 공급망 이슈 등 실제로 벌어진 사건만 원인으로 제시하세요.
-- "주가가 X% 올랐다/내렸다"는 결과를 보도하는 기사 자체는 원인이 아니므로 절대 근거로 사용하지 마세요.
-- 뚜렷한 원인을 찾지 못했다면 found를 false로 하세요. 억지로 이유를 만들지 마세요.
+- 실적 발표, 공시, 산업 뉴스, 규제, M&A, 신규 계약, 경쟁사 동향 등 실제로 있었던
+  사건만 포함하세요.
+- 그 사건 시점에 주가가 실제로 크게 움직였는지 여부는 중요하지 않습니다. 밸류에이션이나
+  내러티브 관점에서 의미가 크다고 판단되면, 주가 변동이 작거나 없었더라도 포함하세요.
+  밸류에이션에 직접 관련된 뉴스·공시는 단순 주가 등락폭보다 우선적으로 포함하세요.
+- "주가가 X% 올랐다/내렸다"는 결과를 보도하는 기사 자체는 사건이 아니므로 제외하세요.
+- 최대 {MAX_EVENTS}개, 중요도가 높은 순으로 정렬하세요.
 - 다른 설명 없이 아래 JSON 형식으로만 답하세요.
 
-{"found": true 또는 false, "headline": "10자 내외 짧은 제목", "summary": "2문장 이내 설명", "category": "실적/산업뉴스/규제/공급망/경쟁사/기타 중 하나"}"""
+{{"events": [{{"date": "YYYY-MM-DD", "headline": "10자 내외 제목", "reason": "밸류에이션/내러티브에 왜 중요한지 1문장", "category": "{CATEGORY_OPTIONS} 중 하나", "importance": "high 또는 medium"}}]}}"""
+
+VERIFY_SYSTEM_INSTRUCTION = f"""당신은 한국 주식시장을 분석하는 애널리스트입니다.
+아래 사건을 웹 검색으로 사실 확인하고, 근거와 출처를 제공하세요.
+
+규칙:
+- 검색으로 사실을 확인하지 못했다면 found를 false로 하세요. 억지로 만들어내지 마세요.
+- 다른 설명 없이 아래 JSON 형식으로만 답하세요.
+
+{{"found": true 또는 false, "headline": "10자 내외 제목", "summary": "2문장 이내 설명", "category": "{CATEGORY_OPTIONS} 중 하나"}}"""
 
 
 def _fetch_price_history(company_name: str):
@@ -42,41 +65,19 @@ def _fetch_price_history(company_name: str):
     return None
 
 
-def _detect_inflections(hist) -> list[dict]:
-    """WINDOW_DAYS 구간 등락률이 THRESHOLD_PCT를 넘는 변곡점을 찾는다.
-
-    겹치는 구간은 등락폭이 가장 큰 것만 남기고, 최신순으로 최대 MAX_EVENTS개 반환.
-    """
-    closes = hist["Close"]
-    dates = hist.index
-
-    candidates = []
-    for i in range(WINDOW_DAYS, len(closes)):
-        start_price = float(closes.iloc[i - WINDOW_DAYS])
-        end_price = float(closes.iloc[i])
-        if start_price <= 0:
-            continue
-        pct = (end_price - start_price) / start_price * 100
-        if abs(pct) >= THRESHOLD_PCT:
-            candidates.append({
-                "end_idx": i,
-                "start_date": dates[i - WINDOW_DAYS].strftime("%Y-%m-%d"),
-                "end_date": dates[i].strftime("%Y-%m-%d"),
-                "pct_change": round(pct, 1),
-            })
-
-    candidates.sort(key=lambda c: -abs(c["pct_change"]))
-    picked, used_idx = [], []
-    for c in candidates:
-        if any(abs(c["end_idx"] - u) < WINDOW_DAYS for u in used_idx):
-            continue
-        used_idx.append(c["end_idx"])
-        picked.append(c)
-        if len(picked) >= MAX_EVENTS:
-            break
-
-    picked.sort(key=lambda c: c["end_date"], reverse=True)
-    return picked
+def _price_change_near(hist, date_str: str | None) -> float | None:
+    """이벤트 날짜 전후 거래일 등락률(참고용). 계산 불가 시 None."""
+    if hist is None or hist.empty or not date_str:
+        return None
+    dates = [d.strftime("%Y-%m-%d") for d in hist.index]
+    pos = next((i for i, d in enumerate(dates) if d >= date_str), len(dates) - 1)
+    start_pos = max(0, pos - PRICE_WINDOW_BEFORE)
+    end_pos = min(len(dates) - 1, pos + PRICE_WINDOW_AFTER)
+    start_price = float(hist["Close"].iloc[start_pos])
+    end_price = float(hist["Close"].iloc[end_pos])
+    if start_price <= 0:
+        return None
+    return round((end_price - start_price) / start_price * 100, 1)
 
 
 def _parse_event_json(text: str) -> dict | None:
@@ -89,43 +90,59 @@ def _parse_event_json(text: str) -> dict | None:
         return None
 
 
-async def _explain_event(company_name: str, candidate: dict) -> dict | None:
-    direction = "상승" if candidate["pct_change"] > 0 else "하락"
+async def _discover_events(company_name: str) -> list[dict]:
+    prompt = f"{company_name}에 대해 최근 1년간 밸류에이션이나 투자 내러티브에 유의미한 영향을 준 사건을 찾아주세요."
+    result = await call_gemini_with_search(
+        prompt, system_instruction=DISCOVERY_SYSTEM_INSTRUCTION, generation_config=GEMINI_EVENT_DISCOVERY_CONFIG,
+    )
+    parsed = _parse_event_json(result["text"])
+    if not parsed:
+        return []
+    return parsed.get("events", [])[:MAX_EVENTS]
+
+
+async def _verify_event(company_name: str, candidate: dict) -> dict | None:
+    date = candidate.get("date", "")
     prompt = (
-        f"{company_name} 주가가 {candidate['start_date']}부터 {candidate['end_date']}까지 "
-        f"{candidate['pct_change']:+.1f}% {direction}했습니다. "
-        "이 기간 전후로 이 변동에 실질적인 영향을 줬을 만한 실제 사건을 찾아주세요."
+        f"{company_name}과 관련해 {date or '최근'}경 있었던 다음 사건을 검색으로 확인해주세요: "
+        f"{candidate.get('headline', '')} — {candidate.get('reason', '')}"
     )
     result = await call_gemini_with_search(
-        prompt, system_instruction=EVENT_SYSTEM_INSTRUCTION, generation_config=GEMINI_EVENT_CONFIG,
+        prompt, system_instruction=VERIFY_SYSTEM_INSTRUCTION, generation_config=GEMINI_EVENT_CONFIG,
     )
     parsed = _parse_event_json(result["text"])
     if not parsed or not parsed.get("found"):
         return None
 
     return {
-        "start_date": candidate["start_date"],
-        "end_date": candidate["end_date"],
-        "pct_change": candidate["pct_change"],
-        "headline": parsed.get("headline", ""),
+        "date": date,
+        "headline": parsed.get("headline") or candidate.get("headline", ""),
         "summary": parsed.get("summary", ""),
-        "category": parsed.get("category", "기타"),
+        "category": parsed.get("category") or candidate.get("category", "기타"),
+        "importance": candidate.get("importance", "medium"),
         "sources": result["sources"][:3],
     }
 
 
 async def analyze_price_events(company_name: str) -> dict:
-    """종목의 주가 변곡점과 원인 사건 목록을 반환합니다."""
+    """종목의 밸류에이션·내러티브 관점 유의미 사건 목록을 반환합니다."""
     hist = _fetch_price_history(company_name)
-    if hist is None or hist.empty:
+
+    candidates = await _discover_events(company_name)
+    if not candidates:
         return {"company_name": company_name, "events": []}
 
-    candidates = _detect_inflections(hist)
-
+    # Gemini 무료 티어 분당 요청 한도(RPM)를 넘기지 않도록 순차 처리한다.
     events = []
-    for candidate in candidates:
-        explained = await _explain_event(company_name, candidate)
-        if explained:
-            events.append(explained)
+    for c in candidates:
+        v = await _verify_event(company_name, c)
+        if v is None:
+            continue
+        v["pct_change"] = _price_change_near(hist, v.get("date"))
+        events.append(v)
+
+    importance_rank = {"high": 0, "medium": 1, "low": 2}
+    events.sort(key=lambda e: e.get("date") or "", reverse=True)
+    events.sort(key=lambda e: importance_rank.get(e.get("importance", "medium"), 1))
 
     return {"company_name": company_name, "events": events}

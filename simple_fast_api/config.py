@@ -63,6 +63,11 @@ GEMINI_EVENT_CONFIG = {
     "maxOutputTokens": 2048,
     "thinkingConfig": {"thinkingBudget": 1024},
 }
+GEMINI_EVENT_DISCOVERY_CONFIG = {
+    "temperature": 0.3,
+    "maxOutputTokens": 4096,
+    "thinkingConfig": {"thinkingBudget": 2048},
+}
 GEMINI_SUMMARY_CONFIG = {
     "temperature": 0.3,
     "maxOutputTokens": 600,

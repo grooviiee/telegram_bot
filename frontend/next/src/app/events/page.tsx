@@ -11,12 +11,12 @@ interface Source {
 }
 
 interface PriceEvent {
-  start_date: string;
-  end_date: string;
-  pct_change: number;
+  date: string;
+  pct_change: number | null;
   headline: string;
   summary: string;
   category: string;
+  importance: 'high' | 'medium' | string;
   sources: Source[];
 }
 
@@ -27,10 +27,10 @@ interface EventsData {
 const PAGE_KEY = 'events';
 
 const EVENT_STEPS = [
-  { label: '회사명으로 종목코드를 조회하는 중',           after: 0 },
-  { label: '최근 1년 주가 데이터를 분석하는 중',          after: 1_500 },
-  { label: '급등락 변곡점 구간을 탐지하는 중',            after: 4_000 },
-  { label: 'AI가 원인 사건을 웹에서 검색하는 중 (최대 2분 정도 걸릴 수 있어요)', after: 8_000 },
+  { label: '회사명으로 종목코드를 조회하는 중',                      after: 0 },
+  { label: 'AI가 밸류에이션·내러티브 관점에서 유의미한 사건을 찾는 중', after: 1_500 },
+  { label: '찾은 사건을 하나씩 웹에서 사실 확인하는 중',              after: 6_000 },
+  { label: '거의 다 됐어요, 조금만 더 기다려주세요 (최대 2분)',       after: 15_000 },
 ];
 
 interface Props {
@@ -40,9 +40,24 @@ interface Props {
   onSearched?: () => void;
 }
 
+function PctBadge({ pct }: { pct: number | null }) {
+  if (pct == null) {
+    return (
+      <span className="text-xs font-medium text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+        주가 영향 미미
+      </span>
+    );
+  }
+  const isUp = pct > 0;
+  return (
+    <span className={`text-sm font-bold ${isUp ? 'text-red-500' : 'text-blue-500'}`}>
+      {isUp ? '+' : ''}{pct}%
+    </span>
+  );
+}
+
 function EventCard({ event }: { event: PriceEvent }) {
   const [open, setOpen] = useState(false);
-  const isUp = event.pct_change > 0;
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -50,14 +65,17 @@ function EventCard({ event }: { event: PriceEvent }) {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-start gap-4 px-5 py-4 text-left hover:bg-gray-50 transition-colors"
       >
-        <div className="flex-shrink-0 text-xs text-gray-400 pt-0.5 w-28">
-          {event.start_date} ~<br />{event.end_date}
+        <div className="flex-shrink-0 text-xs text-gray-400 pt-0.5 w-24">
+          {event.date}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-sm font-bold ${isUp ? 'text-red-500' : 'text-blue-500'}`}>
-              {isUp ? '+' : ''}{event.pct_change}%
-            </span>
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
+            {event.importance === 'high' && (
+              <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
+                ★ 중요도 높음
+              </span>
+            )}
+            <PctBadge pct={event.pct_change} />
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
               {event.category}
             </span>
@@ -113,7 +131,8 @@ export default function EventsPage({
     <div className="p-6 bg-gray-50 min-h-screen">
       <h1 className="text-2xl font-bold text-gray-800 mb-1">주가를 움직인 사건들</h1>
       <p className="text-sm text-gray-500 mb-6">
-        최근 1년간 5거래일 기준 급등락 구간을 찾아, AI가 원인이 된 뉴스·이벤트를 검색합니다.
+        최근 1년간 밸류에이션·투자 내러티브에 유의미한 사건을 AI가 검색합니다.
+        주가가 실제로 크게 움직이지 않았어도 포함될 수 있어요.
       </p>
 
       {/* 검색 */}
@@ -165,7 +184,7 @@ export default function EventsPage({
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-400">최근 1년간 유의미한 급등락 구간을 찾지 못했습니다.</p>
+          <p className="text-sm text-gray-400">최근 1년간 유의미한 사건을 찾지 못했습니다.</p>
         )
       )}
     </div>
