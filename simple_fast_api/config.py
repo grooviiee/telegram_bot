@@ -10,6 +10,9 @@ GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
 WEBHOOK_SECRET_TOKEN: str = os.getenv("WEBHOOK_SECRET_TOKEN", "")
+NAVER_CLIENT_ID: str = os.getenv("NAVER_CLIENT_ID", "")
+NAVER_CLIENT_SECRET: str = os.getenv("NAVER_CLIENT_SECRET", "")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 
 # --- External API URLs ---
 DART_BASE_URL = "https://opendart.fss.or.kr/api"
@@ -25,6 +28,11 @@ GEMINI_URL = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}"
     f":generateContent?key={GEMINI_API_KEY}"
 )
+
+NAVER_NEWS_URL = "https://openapi.naver.com/v1/search/news.json"
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 # --- DART 상수 ---
 FS_DIV_ORDER = ["CFS", "OFS"]  # 연결 → 개별 순
@@ -57,16 +65,6 @@ GEMINI_REPORT_CONFIG = {
     "temperature": 0.4,
     "maxOutputTokens": 8192,
     "thinkingConfig": {"thinkingBudget": 4096},
-}
-GEMINI_EVENT_CONFIG = {
-    "temperature": 0.3,
-    "maxOutputTokens": 2048,
-    "thinkingConfig": {"thinkingBudget": 1024},
-}
-GEMINI_EVENT_DISCOVERY_CONFIG = {
-    "temperature": 0.3,
-    "maxOutputTokens": 4096,
-    "thinkingConfig": {"thinkingBudget": 2048},
 }
 GEMINI_SUMMARY_CONFIG = {
     "temperature": 0.3,

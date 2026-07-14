@@ -1,7 +1,14 @@
 """공유 유틸리티 함수. 여러 모듈에서 사용하는 공통 로직을 제공합니다."""
+import asyncio
+import html
 import json
+import re
 import aiohttp
-from config import GEMINI_URL, GEMINI_SUMMARY_CONFIG, GEMINI_MAX_TOOL_ROUNDS
+from config import (
+    GEMINI_URL, GEMINI_SUMMARY_CONFIG, GEMINI_MAX_TOOL_ROUNDS,
+    NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, NAVER_NEWS_URL,
+    GROQ_API_KEY, GROQ_MODEL, GROQ_URL,
+)
 
 
 def fmt_krw(v) -> str:
@@ -100,57 +107,121 @@ async def call_gemini(
         return "(AI 응답 생성 실패)"
 
 
-async def call_gemini_with_search(
-    prompt: str,
-    *,
-    system_instruction: str | None = None,
-    generation_config: dict | None = None,
-    timeout: int = 60,
-) -> dict:
-    """Google Search grounding을 사용해 Gemini를 호출합니다.
+def _strip_html(text: str) -> str:
+    """네이버 검색 API 응답의 HTML 태그(<b> 등)와 엔티티를 제거합니다."""
+    return html.unescape(re.sub(r"<[^>]+>", "", text or ""))
+
+
+async def search_naver_news(query: str, display: int = 100, start: int = 1, sort: str = "date") -> list[dict]:
+    """네이버 뉴스 검색 API로 관련 기사 목록을 가져옵니다.
+
+    Args:
+        start: 검색 시작 위치 (1~1000). 페이지네이션에 사용.
 
     Returns:
-        {"text": str, "sources": [{"title": str, "url": str}, ...]}
+        [{"title": str, "summary": str, "url": str, "pub_date": str}, ...]
+        네이버 API 키가 없거나 호출 실패 시 빈 리스트.
     """
-    if generation_config is None:
-        generation_config = GEMINI_SUMMARY_CONFIG
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return []
 
-    payload: dict = {
-        "generationConfig": generation_config,
-        "tools": [{"google_search": {}}],
-        "contents": [{"parts": [{"text": prompt}]}],
+    headers = {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
     }
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    params = {"query": query, "display": display, "start": start, "sort": sort}
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(
-                GEMINI_URL,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
+            async with session.get(
+                NAVER_NEWS_URL, headers=headers, params=params,
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as res:
                 if res.status != 200:
-                    error_body = await res.text()
-                    print(f"[Gemini Search] API Error status={res.status}, body={error_body[:500]}")
-                    return {"text": "(AI 응답 생성 실패)", "sources": []}
+                    body = await res.text()
+                    print(f"[Naver News] API Error status={res.status}, body={body[:300]}")
+                    return []
                 data = await res.json()
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    print(f"[Gemini Search] No candidates returned: {data}")
-                    return {"text": "(AI 응답 생성 실패)", "sources": []}
-
-                text = _extract_text_from_candidates(candidates)
-                grounding = candidates[0].get("groundingMetadata", {}) or {}
-                sources = []
-                for chunk in grounding.get("groundingChunks", []) or []:
-                    web = chunk.get("web") or {}
-                    if web.get("uri"):
-                        sources.append({"title": web.get("title", ""), "url": web["uri"]})
-                return {"text": text, "sources": sources}
     except Exception as e:
-        print(f"[Gemini Search] 호출 오류: {e}")
-        return {"text": "(AI 응답 생성 실패)", "sources": []}
+        print(f"[Naver News] 호출 오류: {e}")
+        return []
+
+    return [
+        {
+            "title": _strip_html(item.get("title", "")),
+            "summary": _strip_html(item.get("description", "")),
+            "url": item.get("originallink") or item.get("link", ""),
+            "pub_date": item.get("pubDate", ""),
+        }
+        for item in data.get("items", [])
+    ]
+
+
+_GROQ_RETRY_AFTER_RE = re.compile(r"try again in ([\d.]+)s")
+
+
+async def call_groq(
+    prompt: str,
+    *,
+    system_instruction: str | None = None,
+    temperature: float = 0.3,
+    json_mode: bool = True,
+    timeout: int = 60,
+    max_retries: int = 1,
+) -> str:
+    """Groq(OpenAI 호환) Chat Completions API를 호출해 텍스트 응답을 반환합니다.
+
+    무료 티어는 분당 토큰 한도(TPM)가 있어 429가 흔하다. 에러 메시지에 포함된
+    "try again in Ns" 안내를 파싱해 그만큼 대기 후 한 번 재시도한다.
+    """
+    messages = []
+    if system_instruction:
+        messages.append({"role": "system", "content": system_instruction})
+    messages.append({"role": "user", "content": prompt})
+
+    payload: dict = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    for attempt in range(max_retries + 1):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    GROQ_URL, json=payload, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as res:
+                    if res.status == 429 and attempt < max_retries:
+                        body = await res.text()
+                        m = _GROQ_RETRY_AFTER_RE.search(body)
+                        wait = float(m.group(1)) + 1 if m else 15.0
+                        print(f"[Groq] 429 — {wait:.1f}초 후 재시도")
+                        await asyncio.sleep(wait)
+                        continue
+                    if res.status != 200:
+                        body = await res.text()
+                        print(f"[Groq] API Error status={res.status}, body={body[:500]}")
+                        return "(AI 응답 생성 실패)"
+                    data = await res.json()
+                    choices = data.get("choices", [])
+                    if not choices:
+                        print(f"[Groq] No choices returned: {data}")
+                        return "(AI 응답 생성 실패)"
+                    content = choices[0].get("message", {}).get("content", "")
+                    return content or "(AI 응답 생성 실패)"
+        except Exception as e:
+            print(f"[Groq] 호출 오류: {e}")
+            return "(AI 응답 생성 실패)"
+
+    return "(AI 응답 생성 실패)"
 
 
 async def call_gemini_with_tools(

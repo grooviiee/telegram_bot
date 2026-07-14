@@ -27,10 +27,10 @@ interface EventsData {
 const PAGE_KEY = 'events';
 
 const EVENT_STEPS = [
-  { label: '회사명으로 종목코드를 조회하는 중',                      after: 0 },
-  { label: 'AI가 밸류에이션·내러티브 관점에서 유의미한 사건을 찾는 중', after: 1_500 },
-  { label: '찾은 사건을 하나씩 웹에서 사실 확인하는 중',              after: 6_000 },
-  { label: '거의 다 됐어요, 조금만 더 기다려주세요 (최대 2분)',       after: 15_000 },
+  { label: '회사명으로 종목코드를 조회하는 중',                    after: 0 },
+  { label: '최근 뉴스 기사를 모으는 중',                          after: 1_000 },
+  { label: 'AI가 밸류에이션·내러티브 관점에서 사건을 선별하는 중',   after: 3_000 },
+  { label: '거의 다 됐어요, 조금만 더 기다려주세요',                after: 10_000 },
 ];
 
 interface Props {
