@@ -61,6 +61,17 @@ def _fetch_price_history(company_name: str):
     return None
 
 
+def _serialize_prices(hist) -> list[dict]:
+    """일별 종가 시계열을 [{date, close}] 형태로 직렬화합니다. 시세가 없으면 빈 리스트."""
+    if hist is None or hist.empty:
+        return []
+    return [
+        {"date": d.strftime("%Y-%m-%d"), "close": round(float(c), 2)}
+        for d, c in zip(hist.index, hist["Close"])
+        if c == c  # NaN 제외
+    ]
+
+
 def _price_change_near(hist, date_str: str | None) -> float | None:
     """이벤트 날짜 전후 거래일 등락률(참고용). 계산 불가 시 None."""
     if hist is None or hist.empty or not date_str:
@@ -74,6 +85,14 @@ def _price_change_near(hist, date_str: str | None) -> float | None:
     if start_price <= 0:
         return None
     return round((end_price - start_price) / start_price * 100, 1)
+
+
+def _anchor_date_near(hist, date_str: str | None) -> str | None:
+    """이벤트 날짜 이후 첫 거래일을 반환합니다(차트 마커 고정용). 매칭 불가 시 None."""
+    if hist is None or hist.empty or not date_str:
+        return None
+    dates = [d.strftime("%Y-%m-%d") for d in hist.index]
+    return next((d for d in dates if d >= date_str), dates[-1])
 
 
 def _parse_json_object(text: str) -> dict | None:
@@ -186,14 +205,15 @@ async def analyze_price_events(company_name: str) -> dict:
 
     articles = await _gather_recent_articles(company_name)
     if not articles:
-        return {"company_name": company_name, "events": []}
+        return {"company_name": company_name, "events": [], "prices": _serialize_prices(hist)}
 
     events = await _select_events(company_name, articles)
     for e in events:
         e["pct_change"] = _price_change_near(hist, e.get("date"))
+        e["anchor_date"] = _anchor_date_near(hist, e.get("date"))
 
     importance_rank = {"high": 0, "medium": 1, "low": 2}
     events.sort(key=lambda e: e.get("date") or "", reverse=True)
     events.sort(key=lambda e: importance_rank.get(e.get("importance", "medium"), 1))
 
-    return {"company_name": company_name, "events": events}
+    return {"company_name": company_name, "events": events, "prices": _serialize_prices(hist)}
