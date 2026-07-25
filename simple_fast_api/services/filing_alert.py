@@ -1,9 +1,19 @@
-"""공시 감지 및 Gemini 기반 투자자 관점 요약 모듈."""
+"""공시 감지 및 투자자 관점 요약 모듈.
+
+요약은 공시명 키워드에 대응하는 정적 템플릿(`config.FILING_SUMMARY_TEMPLATES`)으로
+생성한다. 이 경로에서 LLM에 줄 수 있는 정보는 (회사명, 공시명, 접수일)뿐이라
+모델도 제목만 보고 일반론을 쓸 수밖에 없었고, 그 결과물은 템플릿과 정보량이
+같으면서 30분 주기로 과금만 발생시켰다.
+"""
 import asyncio
+import html
 from datetime import datetime, timedelta
 
-from config import IMPORTANT_FILING_KEYWORDS
-from utils import call_gemini
+from config import (
+    IMPORTANT_FILING_KEYWORDS,
+    FILING_SUMMARY_TEMPLATES,
+    FILING_SUMMARY_FALLBACK,
+)
 
 
 def _is_important_filing(report_nm: str) -> bool:
@@ -11,28 +21,25 @@ def _is_important_filing(report_nm: str) -> bool:
     return any(kw in report_nm for kw in IMPORTANT_FILING_KEYWORDS)
 
 
-async def summarize_filing_with_gemini(company_name: str, report_nm: str, rcept_dt: str) -> str:
-    """Gemini를 이용해 공시를 투자자 관점에서 간략히 요약합니다."""
-    prompt = f"""당신은 한국 주식 투자 전문가입니다.
+def summarize_filing(report_nm: str) -> str:
+    """공시명에 대응하는 투자자 관점 요약 텍스트(HTML)를 생성합니다.
 
-아래 공시가 방금 접수되었습니다. 개인 투자자 관점에서 이 공시가 어떤 의미인지 3~4문장으로 간결하게 설명해주세요.
+    FILING_SUMMARY_TEMPLATES의 키 순서대로 첫 매칭을 사용하므로, 구체적인
+    사건("유상증자")이 일반 보고서류("주요사항보고")보다 우선합니다.
+    """
+    template = FILING_SUMMARY_FALLBACK
+    for keyword, candidate in FILING_SUMMARY_TEMPLATES.items():
+        if keyword in report_nm:
+            template = candidate
+            break
 
-- 회사명: {company_name}
-- 공시명: {report_nm}
-- 접수일: {rcept_dt}
-
-답변 형식:
-📌 **한 줄 요약**: (이 공시가 무엇인지 한 줄로)
-💡 **투자자 관점**: (주가/실적/지배구조에 미칠 영향 2~3문장)
-⚠️ **주의사항**: (있다면 투자자가 확인해야 할 점 한 줄, 없으면 생략)
-
-간결하게, 핵심만 답변하세요. 불필요한 면책 문구는 생략하세요."""
-
-    return await call_gemini(
-        prompt,
-        generation_config={"temperature": 0.3, "maxOutputTokens": 512},
-        timeout=30,
-    )
+    lines = [
+        f"📌 <b>한 줄 요약</b>: {template['summary']}",
+        f"💡 <b>투자자 관점</b>: {template['view']}",
+    ]
+    if template.get("caution"):
+        lines.append(f"⚠️ <b>주의사항</b>: {template['caution']}")
+    return "\n".join(lines)
 
 
 async def check_new_filings(corp_code: str, company_name: str) -> list[dict]:
@@ -81,8 +88,8 @@ async def check_new_filings(corp_code: str, company_name: str) -> list[dict]:
     return new_filings
 
 
-async def build_filing_alert_message(company_name: str, filing: dict) -> str:
-    """공시 알림 텔레그램 메시지를 생성합니다."""
+def build_filing_alert_message(company_name: str, filing: dict) -> str:
+    """공시 알림 텔레그램 메시지(HTML)를 생성합니다."""
     report_nm = filing.get("report_nm", "")
     rcept_dt = filing.get("rcept_dt", "")
     rcept_no = filing.get("rcept_no", "")
@@ -93,14 +100,12 @@ async def build_filing_alert_message(company_name: str, filing: dict) -> str:
     else:
         rcept_dt_fmt = rcept_dt
 
-    dart_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-
-    summary = await summarize_filing_with_gemini(company_name, report_nm, rcept_dt_fmt)
+    dart_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={html.escape(rcept_no)}"
 
     return (
-        f"🔔 <b>공시 알림 — {company_name}</b>\n"
-        f"📄 {report_nm}\n"
-        f"📅 {rcept_dt_fmt}\n\n"
-        f"{summary}\n\n"
+        f"🔔 <b>공시 알림 — {html.escape(company_name)}</b>\n"
+        f"📄 {html.escape(report_nm)}\n"
+        f"📅 {html.escape(rcept_dt_fmt)}\n\n"
+        f"{summarize_filing(report_nm)}\n\n"
         f"<a href=\"{dart_url}\">📎 DART 원문 보기</a>"
     )

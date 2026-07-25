@@ -7,7 +7,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from config import GEMINI_CHAT_CONFIG
+from config import GEMINI_CHAT_CONFIG, CHAT_HISTORY_MAX_MESSAGES
 from utils import fmt_krw, call_gemini_with_tools
 from services.dart import fetch_dart_financials_q, fetch_filing_list
 from services.scoring import (
@@ -595,8 +595,9 @@ async def chat_with_gemini(
             "parts": [{"text": f"네, {company_name}의 DART 공시 데이터를 바탕으로 질문에 답변드리겠습니다. 무엇이 궁금하신가요?"}],
         })
 
-    # 이전 대화 이력 (최근 15턴)
-    recent_history = history[-30:]
+    # 이전 대화 이력 — 봇뿐 아니라 웹 클라이언트가 보낸 이력도 여기서 잘라
+    # 매 턴 재전송되는 입력 토큰을 제한한다.
+    recent_history = history[-CHAT_HISTORY_MAX_MESSAGES:]
     for msg in recent_history:
         contents.append({
             "role": msg["role"],
