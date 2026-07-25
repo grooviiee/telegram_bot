@@ -10,6 +10,7 @@ import database
 from cache import (
     dividend_cache, financials_cache, business_cache,
     valuation_cache, report_cache, buffett_report_cache, events_cache,
+    insider_cache,
 )
 from services.dart import (
     resolve_corp_code, fetch_dart_financials, fetch_business_overview,
@@ -32,13 +33,23 @@ async def _fetch_recent_filings(corp_code: str) -> list[dict]:
     return filings or []
 
 
-async def _gather_company_data(corp_code: str, company_name: str) -> dict:
-    """리포트/챗에 필요한 데이터를 병렬 조회합니다."""
+async def _identity(value):
+    """이미 조회를 마친 값을 asyncio.gather에 그대로 흘려보내기 위한 헬퍼."""
+    return value
+
+
+async def _gather_company_data(
+    corp_code: str, company_name: str, filings: list[dict] | None = None,
+) -> dict:
+    """리포트/챗에 필요한 데이터를 병렬 조회합니다.
+
+    filings를 이미 조회했다면 넘겨서 중복 호출을 피합니다.
+    """
     current_year = datetime.now().year
 
-    biz_result, filings, fin_all = await asyncio.gather(
+    biz_result, filings_result, fin_all = await asyncio.gather(
         asyncio.to_thread(fetch_business_overview, corp_code, company_name),
-        _fetch_recent_filings(corp_code),
+        _fetch_recent_filings(corp_code) if filings is None else _identity(filings),
         asyncio.gather(
             *[asyncio.to_thread(fetch_dart_financials, corp_code, str(y))
               for y in range(current_year - 1, current_year - 6, -1)],
@@ -46,6 +57,7 @@ async def _gather_company_data(corp_code: str, company_name: str) -> dict:
         ),
         return_exceptions=True,
     )
+    filings = filings_result
 
     return {
         'business_sections': biz_result.get('sections', []) if isinstance(biz_result, dict) else [],
@@ -56,46 +68,48 @@ async def _gather_company_data(corp_code: str, company_name: str) -> dict:
     }
 
 
-@router.get("/report/{company_name}")
-async def get_report(company_name: str):
-    """Gemini AI를 이용해 종합 투자 리포트를 생성합니다."""
+async def _cached_report(company_name: str, cache, generator, extra: dict | None = None):
+    """리포트를 캐시에서 반환하거나, 새 공시가 있을 때만 LLM으로 재생성합니다.
+
+    캐시 키는 회사명(기존 규약 유지)이고, 저장된 최신 공시 접수번호를 '지문'으로
+    함께 보관한다. 지문이 그대로면 리포트 근거 데이터가 바뀌지 않았다는 뜻이므로
+    LLM을 다시 호출하지 않는다. 공시 목록 조회는 무료 DART 호출이라, 이 한 번의
+    추가 호출로 유료 LLM 호출을 아끼는 교환이다.
+    """
     await database.record_search(company_name)
-    cached = await report_cache.get(company_name)
-    if cached is not None:
-        return JSONResponse(content={**cached, 'cached': True})
-
     corp_code = await resolve_corp_code(company_name)
-    data = await _gather_company_data(corp_code, company_name)
+    filings = await _fetch_recent_filings(corp_code)
+    fingerprint = filings[0].get('rcept_no', '') if filings else ''
 
-    report_text = await generate_report(
+    cached = await cache.get(company_name)
+    if cached is not None and cached.get('fingerprint') == fingerprint:
+        payload = {k: v for k, v in cached.items() if k != 'fingerprint'}
+        return JSONResponse(content={**payload, 'cached': True})
+
+    data = await _gather_company_data(corp_code, company_name, filings)
+    report_text = await generator(
         company_name, data['business_sections'], data['financials'],
         data['dividends'], data['valuation'], data['recent_filings'],
     )
 
-    result = {'company_name': company_name, 'report': report_text}
-    await report_cache.set(company_name, result)
+    result = {'company_name': company_name, 'report': report_text, **(extra or {})}
+    await cache.set(company_name, {**result, 'fingerprint': fingerprint})
     return JSONResponse(content={**result, 'cached': False})
+
+
+@router.get("/report/{company_name}")
+async def get_report(company_name: str):
+    """Gemini AI를 이용해 종합 투자 리포트를 생성합니다."""
+    return await _cached_report(company_name, report_cache, generate_report)
 
 
 @router.get("/buffett-report/{company_name}")
 async def get_buffett_report(company_name: str):
     """워렌 버핏 투자 철학을 적용한 종합 투자 리포트를 생성합니다."""
-    await database.record_search(company_name)
-    cached = await buffett_report_cache.get(company_name)
-    if cached is not None:
-        return JSONResponse(content={**cached, 'cached': True})
-
-    corp_code = await resolve_corp_code(company_name)
-    data = await _gather_company_data(corp_code, company_name)
-
-    report_text = await generate_buffett_report(
-        company_name, data['business_sections'], data['financials'],
-        data['dividends'], data['valuation'], data['recent_filings'],
+    return await _cached_report(
+        company_name, buffett_report_cache, generate_buffett_report,
+        extra={'mode': 'buffett'},
     )
-
-    result = {'company_name': company_name, 'report': report_text, 'mode': 'buffett'}
-    await buffett_report_cache.set(company_name, result)
-    return JSONResponse(content={**result, 'cached': False})
 
 
 class ChatRequest(BaseModel):
@@ -166,6 +180,10 @@ async def chat(company_name: str, req: ChatRequest):
 async def get_insider_trading(company_name: str):
     """임원/주요주주 내부자 거래 현황 및 AI 분석을 반환합니다."""
     await database.record_search(company_name)
+    cached = await insider_cache.get(company_name)
+    if cached is not None:
+        return JSONResponse(content={**cached, 'cached': True})
+
     corp_code = await resolve_corp_code(company_name)
     year = str(datetime.now().year - 1)
 
@@ -181,7 +199,7 @@ async def get_insider_trading(company_name: str):
     message_text = build_insider_text(company_name, year, summary, recent_filings)
     ai_analysis = await analyze_insider_with_gemini(company_name, year, summary, recent_filings)
 
-    return {
+    result = {
         "company": company_name,
         "year": year,
         "summary": summary,
@@ -189,6 +207,8 @@ async def get_insider_trading(company_name: str):
         "message_text": message_text,
         "ai_analysis": ai_analysis,
     }
+    await insider_cache.set(company_name, result)
+    return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get("/score/{company_name}")

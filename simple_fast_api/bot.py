@@ -19,7 +19,7 @@ from telegram.ext import (
 from telegram.constants import ParseMode
 
 import database
-from config import TELEGRAM_BOT_TOKEN
+from config import TELEGRAM_BOT_TOKEN, CHAT_HISTORY_MAX_MESSAGES
 from utils import fmt_krw
 
 # -------------------------------------------------------------------
@@ -705,10 +705,10 @@ async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 
     answer = data.get("answer", "")
 
-    # 대화 이력 갱신 (마지막 10턴만 유지)
+    # 대화 이력 갱신 — 유지 길이가 곧 매 턴의 입력 토큰 비용이다.
     history.append({"role": "user",  "text": user_msg})
     history.append({"role": "model", "text": answer})
-    ctx.user_data["chat_history"] = history[-30:]
+    ctx.user_data["chat_history"] = history[-CHAT_HISTORY_MAX_MESSAGES:]
 
     await typing_msg.delete()
     await _send_long(update, _md_to_html(answer))
@@ -857,7 +857,7 @@ async def send_filing_alerts(bot: Bot) -> None:
 
         for filing in new_filings:
             try:
-                text = await build_filing_alert_message(company, filing)
+                text = build_filing_alert_message(company, filing)
             except Exception as e:
                 print(f"[공시알림] {company} 메시지 생성 오류: {e}")
                 continue
