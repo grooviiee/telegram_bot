@@ -49,7 +49,7 @@ def _fetch_with_fs_fallback(url: str, params: dict, fs_order: list[str] | None =
                 accounts = {item['account_nm']: item for item in data['list']}
                 return accounts, fs_div
         except Exception as e:
-            print(f"재무 데이터 조회 오류 ({params.get('bsns_year')}, {fs_div}): {e}")
+            print(f"재무 데이터 조회 오류 ({params.get('bsns_year')}, {fs_div}): {type(e).__name__}")
     return None, ""
 
 
@@ -107,14 +107,14 @@ def _accounts_to_metrics(accounts: dict, year: int, fs_div: str) -> dict:
     current_long     = get_account_value(accounts, '유동성장기부채')
     bonds            = get_account_value(accounts, '사채')
     long_borrow      = get_account_value(accounts, '장기차입금')
-    interest_bearing = sum(x for x in [short_borrow, current_long, bonds, long_borrow] if x is not None) or None
+    interest_bearing = sum([short_borrow, current_long, bonds, long_borrow]) if all(x is not None for x in [short_borrow, current_long, bonds, long_borrow]) else None
 
     capex = abs(capex_raw) if capex_raw is not None else None
-    operating_margin = round(operating_income / revenue * 100, 2) if revenue and operating_income else None
-    roe              = round(net_income / equity * 100, 2)           if equity and net_income       else None
-    debt_ratio       = round(liabilities / equity * 100, 2)          if equity and liabilities      else None
-    current_ratio    = round(current_assets / current_liab * 100, 2) if current_liab and current_assets else None
-    fcf              = (op_cash_flow - capex) if (op_cash_flow is not None and capex is not None) else op_cash_flow
+    operating_margin = round(operating_income / revenue * 100, 2) if revenue and operating_income is not None else None
+    roe              = round(net_income / equity * 100, 2)           if equity and net_income is not None       else None
+    debt_ratio       = round(liabilities / equity * 100, 2)          if equity and liabilities is not None      else None
+    current_ratio    = round(current_assets / current_liab * 100, 2) if current_liab and current_assets is not None else None
+    fcf              = (op_cash_flow - capex) if (op_cash_flow is not None and capex is not None) else None
     net_debt         = (interest_bearing - cash) if (interest_bearing is not None and cash is not None) else None
     net_debt_ratio   = round(net_debt / equity * 100, 2) if (equity and net_debt is not None) else None
     return {
@@ -173,7 +173,7 @@ def _fetch_dividend_common(corp_code: str, year: str, reprt_code: str) -> int | 
         amount = get_account_value(
             accounts, '주당 현금배당금', '주당현금배당금', '현금배당금(주당)', '주당배당금',
         )
-        if amount and amount > 0:
+        if amount is not None and amount >= 0:
             return amount
 
     # 2순위: alotMatter API
@@ -186,10 +186,10 @@ def _fetch_dividend_common(corp_code: str, year: str, reprt_code: str) -> int | 
                 se = item.get('se', '')
                 if '주당' in se and ('현금' in se or '배당' in se):
                     amount = parse_dart_amount(item.get('thstrm', '') or '')
-                    if amount and amount > 0:
+                    if amount is not None and amount >= 0:
                         return amount
     except Exception as e:
-        print(f"alotMatter 배당 조회 오류 ({year}): {e}")
+        print(f"alotMatter 배당 조회 오류 ({year}): {type(e).__name__}")
 
     return None
 
@@ -220,11 +220,11 @@ def _load_corp_xml_root():
             with zipfile.ZipFile(io.BytesIO(content)) as z:
                 z.extractall(REPORTS_DIR)
         except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=500, detail=f"DART 회사 코드 목록 다운로드 실패: {e}")
+            raise HTTPException(status_code=500, detail=f"DART 회사 코드 목록 다운로드 실패: {type(e).__name__}")
     try:
         return ET.parse(corp_code_path).getroot()
     except ET.ParseError as e:
-        raise HTTPException(status_code=500, detail=f"corpCode.xml 파싱 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"corpCode.xml 파싱 실패: {type(e).__name__}")
 
 
 def get_corp_code(company_name: str) -> str:
@@ -525,12 +525,12 @@ def download_reports_logic(company_name: str, corp_code: str):
                     f.write(doc_content)
                 print(f" -> 성공: '{file_name}' 저장 완료.")
     except Exception as e:
-        print(f"보고서 다운로드 중 오류 발생: {e}")
+        print(f"보고서 다운로드 중 오류 발생: {type(e).__name__}")
 
 
 # ── 공시 목록 조회 ───────────────────────────────────────────────────────────
 
-def fetch_filing_list(corp_code: str, bgn_de: str) -> list[dict]:
+def fetch_filing_list(corp_code: str, bgn_de: str, *, strict: bool = False) -> list[dict]:
     """특정 날짜 이후의 공시 목록을 반환합니다."""
     try:
         data = _dart_get(DART_LIST_URL, {
@@ -541,10 +541,14 @@ def fetch_filing_list(corp_code: str, bgn_de: str) -> list[dict]:
             'page_count': 10,
         })
         if data.get('status') != '000':
+            if strict and data.get('status') != '013':
+                raise HTTPException(502, 'DART 공시 목록 조회에 실패했습니다.')
             return []
         return data.get('list', [])
     except Exception as e:
-        print(f"[DART] 공시 목록 조회 오류 (corp_code={corp_code}): {e}")
+        if strict:
+            raise HTTPException(502, 'DART 공시 목록 조회에 실패했습니다.') from None
+        print('[DART] 공시 목록 조회 실패')
         return []
 
 
@@ -579,7 +583,7 @@ def fetch_insider_trading(corp_code: str, year: str) -> dict:
                     })
                 break
         except Exception as e:
-            print(f"[DART] elestock 조회 오류 ({reprt_code}): {e}")
+            print(f"[DART] elestock 조회 오류 ({reprt_code}): {type(e).__name__}")
 
     # 2. 최근 3개월 내부자 신고 공시 목록 (D002)
     recent_filings = []
@@ -605,7 +609,7 @@ def fetch_insider_trading(corp_code: str, year: str) -> dict:
                     'rcept_no': item.get('rcept_no', ''),
                 })
     except Exception as e:
-        print(f"[DART] 내부자 공시 목록 조회 오류: {e}")
+        print(f"[DART] 내부자 공시 목록 조회 오류: {type(e).__name__}")
 
     return {
         'holdings': holdings,

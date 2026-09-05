@@ -7,7 +7,7 @@ import asyncio
 import json
 from datetime import datetime
 
-from config import GEMINI_CHAT_CONFIG
+from config import GEMINI_CHAT_CONFIG, AI_EVIDENCE_RULES
 from utils import fmt_krw, call_gemini_with_tools
 from services.dart import fetch_dart_financials_q, fetch_filing_list
 from services.scoring import (
@@ -242,7 +242,7 @@ def _build_data_context(
             for key, label in [('revenue', '매출'), ('net_income', '순이익'), ('operating_income', '영업이익')]:
                 start_v = first.get(key)
                 end_v = last.get(key)
-                if start_v and end_v and start_v > 0:
+                if start_v is not None and end_v is not None and start_v > 0 and end_v >= 0:
                     cagr = ((end_v / start_v) ** (1 / years) - 1) * 100
                     summary_lines.append(
                         f"  {label}: {fmt_krw(start_v)} → {fmt_krw(end_v)} "
@@ -279,9 +279,9 @@ def _build_data_context(
             f"  {f['year']}년: 매출 {fmt_krw(f.get('revenue'))}, "
             f"영업이익 {fmt_krw(f.get('operating_income'))}, "
             f"당기순이익 {fmt_krw(f.get('net_income'))}, "
-            f"ROE {f.get('roe') or 'N/A'}%, "
-            f"부채비율 {f.get('debt_ratio') or 'N/A'}%, "
-            f"순부채비율 {f.get('net_debt_ratio') or 'N/A'}%"
+            f"ROE {f.get('roe') if f.get('roe') is not None else 'N/A'}%, "
+            f"부채비율 {f.get('debt_ratio') if f.get('debt_ratio') is not None else 'N/A'}%, "
+            f"순부채비율 {f.get('net_debt_ratio') if f.get('net_debt_ratio') is not None else 'N/A'}%"
         )
         if f.get('operating_margin') is not None:
             fin_rows += f", 영업이익률 {f['operating_margin']:.1f}%"
@@ -306,7 +306,7 @@ def _build_data_context(
     dupont_data = compute_dupont(financials)
     dupont_rows = ""
     for dp in dupont_data[-3:]:
-        if dp['net_margin_pct'] is not None:
+        if all(dp[k] is not None for k in ('net_margin_pct', 'asset_turnover', 'leverage')):
             dupont_rows += (
                 f"  {dp['year']}년: 순이익률 {dp['net_margin_pct']:.1f}% × "
                 f"자산회전율 {dp['asset_turnover']:.2f} × "
@@ -323,11 +323,11 @@ def _build_data_context(
     val_text = "N/A"
     if valuation:
         val_text = (
-            f"현재가 {valuation.get('price', 0):,.0f}원, "
+            f"현재가 {fmt_krw(valuation.get('price'))}, "
             f"시가총액 {fmt_krw(valuation.get('market_cap'))}, "
-            f"PER {valuation.get('per') or 'N/A'}x, "
-            f"PBR {valuation.get('pbr') or 'N/A'}x, "
-            f"PSR {valuation.get('psr') or 'N/A'}x"
+            f"PER {valuation.get('per') if valuation.get('per') is not None else 'N/A'}x, "
+            f"PBR {valuation.get('pbr') if valuation.get('pbr') is not None else 'N/A'}x, "
+            f"PSR {valuation.get('psr') if valuation.get('psr') is not None else 'N/A'}x"
         )
         if valuation.get('ev_ebit'):
             val_text += f", EV/EBIT {valuation['ev_ebit']}x"
@@ -373,12 +373,14 @@ def build_system_context(
     )
 
     if buffett_mode:
-        return f"""{BUFFETT_SYSTEM_PROMPT}
+        return f"""{AI_EVIDENCE_RULES}
+{BUFFETT_SYSTEM_PROMPT}
 
 {data_context}
 """
 
-    return f"""당신은 "{company_name}"의 DART 공시 데이터를 기반으로 투자 상담을 제공하는 최고 수준의 전문 애널리스트입니다.
+    return f"""{AI_EVIDENCE_RULES}
+당신은 "{company_name}"의 DART 공시 데이터를 기반으로 투자 상담을 제공하는 최고 수준의 전문 애널리스트입니다.
 
 ## 절대 규칙
 1. 아래 [기업 데이터]만을 근거로 답변하세요.
@@ -412,7 +414,7 @@ def create_tool_executor(
     valuation: dict | None,
 ):
     """chat 엔드포인트에서 사용할 tool_executor 클로저를 생성합니다."""
-    async def tool_executor(name: str, args: dict) -> dict:
+    async def execute(name: str, args: dict) -> dict:
         if name == "get_quarterly_financials":
             year = args.get("year", str(datetime.now().year - 1))
             quarter = args.get("quarter", "Q4")
@@ -435,7 +437,7 @@ def create_tool_executor(
                     }
                 return {"error": f"{year}년 {quarter} 데이터를 찾을 수 없습니다."}
             except Exception as e:
-                return {"error": f"분기 데이터 조회 실패: {str(e)[:100]}"}
+                return {"error": f"분기 데이터 조회 실패: {type(e).__name__}"}
 
         elif name == "calculate_intrinsic_value":
             discount_rate = args.get("discount_rate", 0.10)
@@ -512,7 +514,7 @@ def create_tool_executor(
                     "results": matched[:15],
                 }
             except Exception as e:
-                return {"error": f"공시 검색 실패: {str(e)[:100]}"}
+                return {"error": f"공시 검색 실패: {type(e).__name__}"}
 
         elif name == "get_dupont_analysis":
             year_arg = args.get("year", "all")
@@ -531,7 +533,7 @@ def create_tool_executor(
                     "year": dp['year'],
                     "roe": f"{dp['roe']:.1f}%" if dp['roe'] else "N/A",
                 }
-                if dp['net_margin_pct'] is not None:
+                if all(dp[k] is not None for k in ('net_margin_pct', 'asset_turnover', 'leverage')):
                     entry.update({
                         "net_margin": f"{dp['net_margin_pct']:.1f}%",
                         "asset_turnover": f"{dp['asset_turnover']:.2f}x",
@@ -543,6 +545,18 @@ def create_tool_executor(
             return {"dupont_analysis": formatted}
 
         return {"error": f"알 수 없는 도구: {name}"}
+
+    results: dict[str, dict] = {}
+
+    async def tool_executor(name: str, args: dict) -> dict:
+        """한 응답 생성 중 중복 도구 요청의 조회·계산을 재사용합니다."""
+        key = json.dumps([name, args], sort_keys=True)
+        if key not in results:
+            result = await execute(name, args)
+            if 'error' not in result:
+                results[key] = result
+            return result
+        return results[key]
 
     return tool_executor
 

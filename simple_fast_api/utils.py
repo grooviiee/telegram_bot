@@ -94,16 +94,16 @@ async def call_gemini(
             ) as res:
                 if res.status != 200:
                     error_body = await res.text()
-                    print(f"[Gemini API Error] status={res.status}, body={error_body[:500]}")
+                    print(f"[Gemini API Error] status={res.status}")
                     return "(AI 응답 생성 실패)"
                 data = await res.json()
                 candidates = data.get("candidates", [])
                 if not candidates:
-                    print(f"[Gemini] No candidates returned: {data}")
+                    print("[Gemini] 응답 후보 없음")
                     return "(AI 응답 생성 실패)"
                 return _extract_text_from_candidates(candidates)
     except Exception as e:
-        print(f"[Gemini] 호출 오류: {e}")
+        print(f"[Gemini] 호출 오류: {type(e).__name__}")
         return "(AI 응답 생성 실패)"
 
 
@@ -139,11 +139,11 @@ async def search_naver_news(query: str, display: int = 100, start: int = 1, sort
             ) as res:
                 if res.status != 200:
                     body = await res.text()
-                    print(f"[Naver News] API Error status={res.status}, body={body[:300]}")
+                    print(f"[Naver News] API Error status={res.status}")
                     return []
                 data = await res.json()
     except Exception as e:
-        print(f"[Naver News] 호출 오류: {e}")
+        print(f"[Naver News] 호출 오류: {type(e).__name__}")
         return []
 
     return [
@@ -208,7 +208,7 @@ async def call_groq(
                         continue
                     if res.status != 200:
                         body = await res.text()
-                        print(f"[Groq] API Error status={res.status}, body={body[:500]}")
+                        print(f"[Groq] API Error status={res.status}")
                         return "(AI 응답 생성 실패)"
                     data = await res.json()
                     choices = data.get("choices", [])
@@ -218,7 +218,7 @@ async def call_groq(
                     content = choices[0].get("message", {}).get("content", "")
                     return content or "(AI 응답 생성 실패)"
         except Exception as e:
-            print(f"[Groq] 호출 오류: {e}")
+            print(f"[Groq] 호출 오류: {type(e).__name__}")
             return "(AI 응답 생성 실패)"
 
     return "(AI 응답 생성 실패)"
@@ -272,13 +272,13 @@ async def call_gemini_with_tools(
                 ) as res:
                     if res.status != 200:
                         error_body = await res.text()
-                        print(f"[Gemini Tool] API Error status={res.status}, body={error_body[:500]}")
+                        print(f"[Gemini Tool] API Error status={res.status}")
                         return "(AI 응답 생성 실패)"
                     data = await res.json()
 
                 candidates = data.get("candidates", [])
                 if not candidates:
-                    print(f"[Gemini Tool] No candidates: {data}")
+                    print("[Gemini Tool] 응답 후보 없음")
                     return "(AI 응답 생성 실패)"
 
                 response_parts = candidates[0].get("content", {}).get("parts", [])
@@ -304,8 +304,8 @@ async def call_gemini_with_tools(
                     try:
                         result = await tool_executor(fn_name, fn_args)
                     except Exception as e:
-                        print(f"[Gemini Tool] Executor error for {fn_name}: {e}")
-                        result = {"error": str(e)}
+                        print(f"[Gemini Tool] Executor error for {fn_name}: {type(e).__name__}")
+                        result = {"error": "도구 실행에 실패했습니다."}
 
                     function_response_parts.append({
                         "functionResponse": {
@@ -330,5 +330,5 @@ async def call_gemini_with_tools(
             return _extract_text_from_candidates(data.get("candidates", []))
 
     except Exception as e:
-        print(f"[Gemini Tool] 호출 오류: {e}")
+        print(f"[Gemini Tool] 호출 오류: {type(e).__name__}")
         return "(AI 응답 생성 실패)"

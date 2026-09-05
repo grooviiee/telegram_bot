@@ -4,13 +4,14 @@ AI에 원본 데이터만 전달하는 대신, 사전에 계산된 인사이트�
 AI 자문의 정확도를 높입니다.
 """
 from __future__ import annotations
+from config import SCORE_WEIGHTS as WEIGHTS
 
 
 # ── 성장률 계산 ──────────────────────────────────────────────────────────────
 
 def _cagr(start: int | float | None, end: int | float | None, years: int) -> float | None:
     """연평균 복합 성장률(CAGR)을 계산합니다."""
-    if not start or not end or years <= 0 or start <= 0:
+    if start is None or end is None or years <= 0 or start <= 0 or end < 0:
         return None
     try:
         return (end / start) ** (1 / years) - 1
@@ -65,13 +66,13 @@ def _score_growth(financials: list[dict]) -> dict:
     net_incomes = [f.get('net_income') for f in sorted_fin]
     op_incomes = [f.get('operating_income') for f in sorted_fin]
 
-    years = len(sorted_fin) - 1
-    rev_cagr = _cagr(revenues[0], revenues[-1], years) if revenues[0] and revenues[-1] else None
-    ni_cagr = _cagr(net_incomes[0], net_incomes[-1], years) if net_incomes[0] and net_incomes[-1] else None
+    years = sorted_fin[-1]['year'] - sorted_fin[0]['year']
+    rev_cagr = _cagr(revenues[0], revenues[-1], years) if revenues[0] is not None and revenues[-1] is not None else None
+    ni_cagr = _cagr(net_incomes[0], net_incomes[-1], years) if net_incomes[0] is not None and net_incomes[-1] is not None else None
 
     # YoY 성장률
-    rev_yoy = [_yoy_growth(revenues[i], revenues[i + 1]) for i in range(len(revenues) - 1)]
-    ni_yoy = [_yoy_growth(net_incomes[i], net_incomes[i + 1]) for i in range(len(net_incomes) - 1)]
+    rev_yoy = [(_yoy_growth(revenues[i], revenues[i + 1]) if sorted_fin[i + 1]['year'] == sorted_fin[i]['year'] + 1 else None) for i in range(len(revenues) - 1)]
+    ni_yoy = [(_yoy_growth(net_incomes[i], net_incomes[i + 1]) if sorted_fin[i + 1]['year'] == sorted_fin[i]['year'] + 1 else None) for i in range(len(net_incomes) - 1)]
 
     rev_trend = _trend_direction(revenues)
     ni_trend = _trend_direction(net_incomes)
@@ -316,8 +317,7 @@ def _score_dividend(financials: list[dict], dividends: list[dict]) -> dict:
     consistency = round(years_with_div / total_years * 100, 1) if total_years else 0
 
     # 배당 성장률
-    positive_amounts = [a for a in amounts if a > 0]
-    div_cagr = _cagr(positive_amounts[0], positive_amounts[-1], len(positive_amounts) - 1) if len(positive_amounts) >= 2 else None
+    div_cagr = _cagr(amounts[0], amounts[-1], sorted_div[-1]['year'] - sorted_div[0]['year']) if len(amounts) >= 2 else None
     div_trend = _trend_direction(amounts)
 
     score = 40
@@ -344,7 +344,7 @@ def _score_dividend(financials: list[dict], dividends: list[dict]) -> dict:
         latest_div = max(dividends, key=lambda x: x.get('year', 0))
         eps = latest_fin.get('eps')
         dps = latest_div.get('dividend', 0)
-        if eps and eps > 0 and dps > 0:
+        if latest_fin['year'] == latest_div['year'] and eps and eps > 0 and dps >= 0:
             payout_ratio = round(dps / eps * 100, 1)
             if 20 <= payout_ratio <= 60:
                 score += 5
@@ -452,16 +452,12 @@ def _score_valuation(valuation: dict | None, financials: list[dict]) -> dict:
 
 # ── 종합 스코어 ─────────────────────────────────────────────────────────────
 
-WEIGHTS = {
-    'growth': 0.25,
-    'profitability': 0.25,
-    'financial_health': 0.20,
-    'dividend': 0.10,
-    'valuation': 0.20,
-}
 
 
-def _score_to_grade(score: int | float) -> str:
+
+def _score_to_grade(score: int | float | None) -> str:
+    if score is None:
+        return 'N/A'
     if score >= 85:
         return 'A+'
     if score >= 75:
@@ -516,11 +512,24 @@ def compute_investment_score(
         'valuation': _score_valuation(valuation, financials),
     }
 
+    latest = max(financials, key=lambda f: f['year']) if financials else {}
+    availability = {
+        'growth': len(financials) >= 2 and len({f.get('fs_div') for f in financials}) == 1 and all(f.get('revenue') is not None and f.get('net_income') is not None for f in financials),
+        'profitability': latest.get('roe') is not None and latest.get('operating_margin') is not None,
+        'financial_health': latest.get('debt_ratio') is not None,
+        'dividend': bool(dividends) and max(d['year'] for d in dividends) == latest.get('year'),
+        'valuation': bool(valuation) and any(valuation.get(k) is not None for k in ('per', 'pbr', 'psr', 'ev_ebit')),
+    }
+    for name, available in availability.items():
+        categories[name]['available'] = available
+        if not available:
+            categories[name].update(score=None, grade='N/A', signals=['데이터 부족 — 평가 불가'])
+    missing = [name for name, available in availability.items() if not available]
     total = sum(
-        categories[cat]['score'] * weight
+        (categories[cat]['score'] or 0) * weight
         for cat, weight in WEIGHTS.items()
     )
-    total = round(total, 1)
+    total = round(total, 1) if not missing else None
 
     # 주요 시그널 통합 (특이 사항 없음 제외)
     key_signals = []
@@ -534,6 +543,8 @@ def compute_investment_score(
 
     return {
         'total_score': total,
+        'missing_categories': missing,
+        'coverage': round(sum(WEIGHTS[n] for n, ok in availability.items() if ok) * 100),
         'total_grade': _score_to_grade(total),
         'categories': categories,
         'key_signals': key_signals,
@@ -541,11 +552,11 @@ def compute_investment_score(
     }
 
 
-def _build_score_summary(total: float, categories: dict, signals: list[str]) -> str:
+def _build_score_summary(total: float | None, categories: dict, signals: list[str]) -> str:
     """AI 프롬프트에 삽입할 정량 분석 요약 텍스트를 생성합니다."""
     lines = [
         "=== 정량 투자 스코어 (자동 계산) ===",
-        f"종합 점수: {total:.0f}/100 ({_score_to_grade(total)})",
+        f"종합 점수: {total:.0f}/100 ({_score_to_grade(total)})" if total is not None else "종합 점수: 평가 불가 (일부 영역 데이터 부족)",
         "",
     ]
 
@@ -559,7 +570,7 @@ def _build_score_summary(total: float, categories: dict, signals: list[str]) -> 
 
     for cat_key, label in cat_labels.items():
         cat = categories[cat_key]
-        lines.append(f"  {label}: {cat['score']:.0f}점 ({cat['grade']})")
+        lines.append(f"  {label}: {cat['score']:.0f}점 ({cat['grade']})" if cat['score'] is not None else f"  {label}: 평가 불가")
 
         # 주요 세부 지표 포함
         details = cat.get('details', {})
@@ -582,12 +593,9 @@ def _build_score_summary(total: float, categories: dict, signals: list[str]) -> 
 # ── 오너이익 (Owner Earnings) 계산 ─────────────────────────────────────────
 
 def compute_owner_earnings(financials: list[dict]) -> list[dict]:
-    """각 연도별 오너이익을 계산합니다.
+    """FCF를 오너이익 근사치로 제공하며 누락된 현금흐름은 추정하지 않습니다.
 
-    오너이익 = 당기순이익 + 감가상각비 - 유지보수 Capex
-    FCF 데이터가 있으면: 오너이익 ≈ FCF + 감가상각비 일부 조정
-    간이 추정: 오너이익 ≈ 순이익 + (순이익 × 0.15) - Capex 추정치
-    실제로는 FCF를 오너이익 근사치로 사용 (DART에서 감가상각 별도 제공 안 함)
+    유지보수 CapEx를 분리한 정밀 오너이익이 아니므로 근사치임을 표시합니다.
     """
     sorted_fin = sorted(financials, key=lambda x: x['year'])
     results = []
@@ -600,15 +608,15 @@ def compute_owner_earnings(financials: list[dict]) -> list[dict]:
         owner_earnings = None
         method = None
 
-        if fcf is not None and ni is not None:
+        if fcf is not None:
             # FCF가 존재하면 오너이익 근사치로 활용
             # 오너이익 = FCF (이미 감가상각 + Capex가 반영된 값)
             owner_earnings = fcf
             method = "FCF 기반"
         elif ni is not None:
-            # FCF 없으면 순이익의 80%를 보수적 추정치로 사용
-            owner_earnings = int(ni * 0.8)
-            method = "순이익 기반 보수적 추정"
+            # 현금흐름이 없으면 순이익으로 대체하지 않습니다.
+            owner_earnings = None
+            method = "현금흐름 데이터 부족 — 추정하지 않음"
 
         # 오너이익 수익률 (owner earnings yield)
         oe_yield = None
@@ -620,7 +628,7 @@ def compute_owner_earnings(financials: list[dict]) -> list[dict]:
             'owner_earnings': owner_earnings,
             'method': method,
             'oe_margin': oe_yield,
-            'fcf_ni_ratio': round(fcf / ni, 2) if fcf and ni and ni != 0 else None,
+            'fcf_ni_ratio': round(fcf / ni, 2) if fcf is not None and ni is not None and ni != 0 else None,
         })
 
     return results
@@ -673,6 +681,8 @@ def compute_yoy_highlights(financials: list[dict]) -> list[str]:
     prev = sorted_fin[-2]
     curr = sorted_fin[-1]
     year = curr['year']
+    if year != prev['year'] + 1:
+        return []
 
     metrics = [
         ('revenue', '매출'),
@@ -706,3 +716,18 @@ def compute_yoy_highlights(financials: list[dict]) -> list[str]:
             highlights.append(f"{year}년 부채비율 {prev_dr:.0f}% → {curr_dr:.0f}% ({direction})")
 
     return highlights
+
+
+async def cached_investment_score(company: str, data: dict) -> tuple[dict, bool]:
+    """동일 재무·배당·시세 입력의 정량 결과를 AI 없이 재사용합니다."""
+    from cache import score_cache
+    from services.company_data import input_fingerprint
+    inputs = {key: data[key] for key in ('financials', 'dividends', 'valuation')}
+    fingerprint = input_fingerprint(inputs)
+    async with score_cache.lock(company):
+        cached = await score_cache.get(company)
+        if cached and cached.get('input_fingerprint') == fingerprint:
+            return cached['score'], True
+        result = compute_investment_score(**inputs)
+        await score_cache.set(company, {'input_fingerprint': fingerprint, 'score': result})
+        return result, False
