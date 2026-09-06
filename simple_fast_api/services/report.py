@@ -2,7 +2,8 @@
 
 Thinking Mode를 활용하여 더 깊은 추론 기반 분석을 제공합니다.
 """
-from config import GEMINI_REPORT_CONFIG
+import json
+from config import GEMINI_REPORT_CONFIG, AI_EVIDENCE_RULES
 from utils import fmt_krw, call_gemini
 from services.scoring import (
     compute_investment_score,
@@ -33,7 +34,7 @@ def _build_data_section(
             for key, label in [('revenue', '매출'), ('net_income', '순이익'), ('operating_income', '영업이익')]:
                 start_v = first.get(key)
                 end_v = last.get(key)
-                if start_v and end_v and start_v > 0:
+                if start_v is not None and end_v is not None and start_v > 0 and end_v >= 0:
                     cagr = ((end_v / start_v) ** (1 / years) - 1) * 100
                     cagr_lines.append(f"  {label} CAGR: {cagr:+.1f}% ({years}년)")
             if cagr_lines:
@@ -60,9 +61,9 @@ def _build_data_section(
             f"  {f['year']}년 | 매출 {fmt_krw(f.get('revenue'))} | "
             f"영업이익 {fmt_krw(f.get('operating_income'))} | "
             f"당기순이익 {fmt_krw(f.get('net_income'))} | "
-            f"ROE {f.get('roe') or 'N/A'}% | "
-            f"영업이익률 {f.get('operating_margin') or 'N/A'}% | "
-            f"부채비율 {f.get('debt_ratio') or 'N/A'}% | "
+            f"ROE {f.get('roe') if f.get('roe') is not None else 'N/A'}% | "
+            f"영업이익률 {f.get('operating_margin') if f.get('operating_margin') is not None else 'N/A'}% | "
+            f"부채비율 {f.get('debt_ratio') if f.get('debt_ratio') is not None else 'N/A'}% | "
             f"FCF {fmt_krw(f.get('fcf'))}"
         )
         fin_rows += row + "\n"
@@ -79,7 +80,7 @@ def _build_data_section(
     dupont_data = compute_dupont(financials)
     dupont_rows = ""
     for dp in dupont_data[-3:]:
-        if dp['net_margin_pct'] is not None:
+        if all(dp[k] is not None for k in ('net_margin_pct', 'asset_turnover', 'leverage')):
             dupont_rows += (
                 f"  {dp['year']}년: 순이익률 {dp['net_margin_pct']:.1f}% × "
                 f"자산회전율 {dp['asset_turnover']:.2f} × "
@@ -95,12 +96,12 @@ def _build_data_section(
     val_text = "N/A"
     if valuation:
         val_text = (
-            f"현재가 {valuation.get('price', 0):,.0f}원 | "
+            f"현재가 {fmt_krw(valuation.get('price'))} | "
             f"시가총액 {fmt_krw(valuation.get('market_cap'))} | "
-            f"PER {valuation.get('per') or 'N/A'}x | "
-            f"PBR {valuation.get('pbr') or 'N/A'}x | "
-            f"PSR {valuation.get('psr') or 'N/A'}x | "
-            f"EV/EBIT {valuation.get('ev_ebit') or 'N/A'}x"
+            f"PER {valuation.get('per') if valuation.get('per') is not None else 'N/A'}x | "
+            f"PBR {valuation.get('pbr') if valuation.get('pbr') is not None else 'N/A'}x | "
+            f"PSR {valuation.get('psr') if valuation.get('psr') is not None else 'N/A'}x | "
+            f"EV/EBIT {valuation.get('ev_ebit') if valuation.get('ev_ebit') is not None else 'N/A'}x"
         )
 
     # 정량 스코어링 결과
@@ -243,11 +244,14 @@ async def generate_report(
     dividends: list[dict],
     valuation: dict | None,
     recent_filings: list[dict],
+    data_quality: dict | None = None,
 ) -> str:
     data_section = _build_data_section(
         company_name, business_sections, financials, dividends, valuation, recent_filings
     )
-    prompt = STANDARD_REPORT_TEMPLATE.format(company_name=company_name, data_section=data_section)
+    prompt = AI_EVIDENCE_RULES + STANDARD_REPORT_TEMPLATE.format(company_name=company_name, data_section=data_section)
+    if data_quality:
+        prompt += "\n분석 데이터 출처와 한계:\n" + json.dumps(data_quality, ensure_ascii=False)
     return await call_gemini(prompt, generation_config=GEMINI_REPORT_CONFIG, timeout=120)
 
 
@@ -258,9 +262,12 @@ async def generate_buffett_report(
     dividends: list[dict],
     valuation: dict | None,
     recent_filings: list[dict],
+    data_quality: dict | None = None,
 ) -> str:
     data_section = _build_data_section(
         company_name, business_sections, financials, dividends, valuation, recent_filings
     )
-    prompt = BUFFETT_REPORT_TEMPLATE.format(company_name=company_name, data_section=data_section)
+    prompt = AI_EVIDENCE_RULES + BUFFETT_REPORT_TEMPLATE.format(company_name=company_name, data_section=data_section)
+    if data_quality:
+        prompt += "\n분석 데이터 출처와 한계:\n" + json.dumps(data_quality, ensure_ascii=False)
     return await call_gemini(prompt, generation_config=GEMINI_REPORT_CONFIG, timeout=120)

@@ -79,7 +79,7 @@ export function InteractiveLayout() {
       case 'events':           return <EventsPage {...sharedProps} />;
       case 'chat':             return <ChatPage initialCompany={pendingSearch?.page === 'chat' ? pendingSearch.company : undefined} onSearched={onSearched} />;
       case 'favorites':        return <FavoritesPage favorites={favorites} toggleFavorite={toggleFavorite} onFavoriteClick={handleFavoriteClick} />;
-      default:                 return <HomePage />;
+      default:                 return <AnalysisPage {...sharedProps} />;
     }
   };
 

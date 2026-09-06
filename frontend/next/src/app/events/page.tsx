@@ -153,6 +153,7 @@ export default function EventsPage({
   const { companyName, setCompanyName, loading, message, resolvedName, fetchData, data } =
     useDartData<EventsData>(
       {
+        autoFetch: false,
         buildPath: (n) => `/events/${n}`,
         extractData: (j: any) => ({ events: j.events ?? [], prices: j.prices ?? [] }),
       },
@@ -295,10 +296,10 @@ export default function EventsPage({
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <h1 className="text-2xl font-bold text-gray-800 mb-1">주가를 움직인 사건들</h1>
+      <h1 className="text-2xl font-bold text-gray-800 mb-1">기업 주요 사건</h1>
       <p className="text-sm text-gray-500 mb-6">
-        최근 1년간 밸류에이션·투자 내러티브에 유의미한 사건을 AI가 검색해 주가 그래프 위에 표시합니다.
-        마커나 아래 카드를 클릭하면 서로 연동됩니다.
+        수집된 실제 뉴스에서 중요한 사건을 AI가 선별해 주가 그래프 위에 표시합니다.
+        마커와 카드는 서로 연동되며, 전후 등락률은 인과관계를 입증하지 않습니다.
       </p>
 
       {/* 검색 */}
@@ -317,7 +318,7 @@ export default function EventsPage({
           disabled={loading}
           className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
         >
-          {loading ? '분석 중...' : '조회'}
+          {loading ? '분석 중...' : 'AI 사건 분석'}
         </button>
         {resolvedName && toggleFavorite && (
           <button

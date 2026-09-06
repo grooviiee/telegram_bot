@@ -1,10 +1,9 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import React, { useState, useCallback, useRef } from 'react';
+import React from 'react';
+import { useDartData } from '@/lib/useDartData';
 import { ProgressIndicator } from '@/components/ProgressIndicator';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
 
 const REPORT_STEPS = [
   { label: '기업 코드 조회 중',           after: 0 },
@@ -74,43 +73,13 @@ function renderMarkdown(text: string) {
 export default function ReportPage({
   toggleFavorite, isFavorite, initialCompany, onSearched,
 }: Props = {}) {
-  const [companyName, setCompanyName] = useState(initialCompany ?? '');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [report, setReport] = useState<string | null>(null);
-  const [resolvedName, setResolvedName] = useState('');
-  const fetchedRef = useRef<string | null>(null);
-
-  const fetchData = useCallback(async (name?: string) => {
-    const target = (name ?? companyName).trim();
-    if (!target) return;
-    if (fetchedRef.current === target) return;
-    fetchedRef.current = target;
-    setLoading(true);
-    setMessage('');
-    setReport(null);
-    try {
-      const res = await fetch(
-        `${API_BASE}/report/${encodeURIComponent(target)}`,
-        { signal: AbortSignal.timeout(120_000) },
-      );
-      const json = await res.json() as any;
-      if (!res.ok) throw new Error(json.detail ?? '조회 실패');
-      setReport(json.report);
-      setResolvedName(json.company_name);
-      setMessage(`${json.company_name} 리포트 생성 완료${json.cached ? ' (캐시)' : ''}`);
-      onSearched?.();
-    } catch (e: any) {
-      fetchedRef.current = null;
-      setMessage(`오류: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [companyName, onSearched]);
-
-  React.useEffect(() => {
-    if (initialCompany && fetchedRef.current !== initialCompany) fetchData(initialCompany);
-  }, [initialCompany, fetchData]);
+  const { companyName, setCompanyName, loading, message, data, resolvedName, fetchData } = useDartData<{ report: string }>({
+    buildPath: (name) => `/report/${name}`,
+    extractData: (json) => ({ report: (json as { report: string }).report }),
+    timeout: 180_000,
+    autoFetch: false,
+  }, initialCompany, onSearched);
+  const report = data?.report ?? null;
 
   const isError = message.startsWith('오류');
   const starred = resolvedName && isFavorite ? isFavorite(resolvedName, PAGE_KEY) : false;
@@ -126,7 +95,7 @@ export default function ReportPage({
           type="text"
           placeholder="회사명 입력 (예: 삼성전자)"
           value={companyName}
-          onChange={(e) => { setCompanyName(e.target.value); fetchedRef.current = null; }}
+          onChange={(e) => { setCompanyName(e.target.value); }}
           onKeyDown={(e) => e.key === 'Enter' && fetchData()}
           disabled={loading}
           className="flex-1 max-w-xs px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"

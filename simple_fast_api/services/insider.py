@@ -1,4 +1,6 @@
 """내부자 거래 집계 및 Gemini 기반 AI 분석 모듈."""
+from html import escape
+from config import AI_EVIDENCE_RULES
 from utils import fmt_shares, call_gemini
 
 # 직위 중요도 (높을수록 주목해야 할 인물)
@@ -58,43 +60,44 @@ def build_insider_text(company_name: str, year: str, summary: dict, recent_filin
     total_sell = summary['total_sell_shares']
     net = summary['net_change']
     net_sign = "▲" if net >= 0 else "▼"
-    net_label = "순매수" if net >= 0 else "순매도"
+    net_label = "순증가" if net >= 0 else "순감소"
 
     lines = [
-        f"<b>📊 {company_name} 내부자 거래 현황 ({year}년)</b>\n",
+        f"<b>📊 {escape(company_name)} 소유주식 변동 현황 (조회된 신고 기준)</b>\n",
+        "소유주식 증감이며 실제 매수·매도 여부와 원인은 확인되지 않았습니다.\n",
         f"<b>── 집계 요약 ──</b>",
-        f"매수 인원: {buyer_count}명 (+{fmt_shares(total_buy)})",
-        f"매도 인원: {seller_count}명 (-{fmt_shares(total_sell)})",
+        f"증가 신고: {buyer_count}건 (+{fmt_shares(total_buy)})",
+        f"감소 신고: {seller_count}건 (-{fmt_shares(total_sell)})",
         f"{net_sign} {net_label}: {fmt_shares(abs(net))}\n",
     ]
 
-    # 주요 매수자 (등기임원/주요주주)
+    # 주요 증가자 (등기임원/주요주주)
     if summary['key_buyers']:
-        lines.append("<b>── 주요 매수 (등기임원/주주) ──</b>")
+        lines.append("<b>── 주요 증가 (등기임원/주주) ──</b>")
         for h in summary['key_buyers']:
             tag = "🏢" if h.get('is_major_shareholder') else "👤"
-            lines.append(f"{tag} {h['name']} ({h['role']}) +{fmt_shares(h['change'])}")
+            lines.append(f"{tag} {escape(h['name'])} ({escape(h['role'])}) +{fmt_shares(h['change'])}")
         lines.append("")
 
-    # 주요 매도자 (등기임원/주요주주)
+    # 주요 감소자 (등기임원/주요주주)
     if summary['key_sellers']:
-        lines.append("<b>── 주요 매도 (등기임원/주주) ──</b>")
+        lines.append("<b>── 주요 감소 (등기임원/주주) ──</b>")
         for h in summary['key_sellers']:
             tag = "🏢" if h.get('is_major_shareholder') else "👤"
-            lines.append(f"{tag} {h['name']} ({h['role']}) {fmt_shares(h['change'])}")
+            lines.append(f"{tag} {escape(h['name'])} ({escape(h['role'])}) {fmt_shares(h['change'])}")
         lines.append("")
 
     # 변동량 상위 매수/매도 (비등기 포함)
     if summary['top_buyers']:
-        lines.append("<b>── 매수 상위 5인 ──</b>")
+        lines.append("<b>── 증가 상위 5인 ──</b>")
         for h in summary['top_buyers']:
-            lines.append(f"  {h['name']} ({h['role']}) +{fmt_shares(h['change'])}")
+            lines.append(f"  {escape(h['name'])} ({escape(h['role'])}) +{fmt_shares(h['change'])}")
         lines.append("")
 
     if summary['top_sellers']:
-        lines.append("<b>── 매도 상위 5인 ──</b>")
+        lines.append("<b>── 감소 상위 5인 ──</b>")
         for h in summary['top_sellers']:
-            lines.append(f"  {h['name']} ({h['role']}) {fmt_shares(h['change'])}")
+            lines.append(f"  {escape(h['name'])} ({escape(h['role'])}) {fmt_shares(h['change'])}")
         lines.append("")
 
     # 최근 3개월 신고 내역
@@ -105,7 +108,7 @@ def build_insider_text(company_name: str, year: str, summary: dict, recent_filin
             if len(dt) == 8:
                 dt = f"{dt[:4]}.{dt[4:6]}.{dt[6:]}"
             filer = f.get('filer', '')
-            lines.append(f"  {dt} {filer}")
+            lines.append(f"  {dt} {escape(filer)}")
         lines.append("")
 
     return "\n".join(lines)
@@ -119,11 +122,11 @@ def _build_gemini_prompt(company_name: str, year: str, summary: dict, recent_fil
     net = summary['net_change']
 
     top_buyers_txt = "\n".join(
-        f"- {h['name']} ({h['role']}, {'등기' if h['is_registered'] else '비등기'}): +{h['change']:,}주"
+        f"- {escape(h['name'])} ({escape(h['role'])}, {'등기' if h['is_registered'] else '비등기'}): +{h['change']:,}주"
         for h in summary['top_buyers']
     )
     top_sellers_txt = "\n".join(
-        f"- {h['name']} ({h['role']}, {'등기' if h['is_registered'] else '비등기'}): {h['change']:,}주"
+        f"- {escape(h['name'])} ({escape(h['role'])}, {'등기' if h['is_registered'] else '비등기'}): {h['change']:,}주"
         for h in summary['top_sellers']
     )
     recent_txt = "\n".join(
@@ -136,14 +139,14 @@ def _build_gemini_prompt(company_name: str, year: str, summary: dict, recent_fil
 아래는 {company_name}의 {year}년 임원/주요주주 소유주식 변동 데이터입니다.
 
 [집계]
-- 매수 인원: {buyer_count}명 (합계 +{total_buy:,}주)
-- 매도 인원: {seller_count}명 (합계 -{total_sell:,}주)
+- 증가 신고: {buyer_count}명 (합계 +{total_buy:,}주)
+- 감소 신고: {seller_count}명 (합계 -{total_sell:,}주)
 - 순변동: {net:+,}주
 
-[매수 상위]
+[증가 상위]
 {top_buyers_txt or '없음'}
 
-[매도 상위]
+[감소 상위]
 {top_sellers_txt or '없음'}
 
 [최근 3개월 신고]
@@ -161,5 +164,5 @@ def _build_gemini_prompt(company_name: str, year: str, summary: dict, recent_fil
 
 async def analyze_insider_with_gemini(company_name: str, year: str, summary: dict, recent_filings: list[dict]) -> str:
     """Gemini로 내부자 거래 패턴을 분석합니다."""
-    prompt = _build_gemini_prompt(company_name, year, summary, recent_filings)
+    prompt = AI_EVIDENCE_RULES + "소유주식 증감은 매수·매도를 입증하지 않습니다. 증여·보상·정정 등 원인이 확인되지 않았습니다.\n" + _build_gemini_prompt(company_name, year, summary, recent_filings)
     return await call_gemini(prompt, timeout=30)

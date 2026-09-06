@@ -7,6 +7,8 @@ Naver 뉴스 검색 API로 최근 1년간의 실제 기사를 모으고, Groq LL
 - 사건 선정 기준은 밸류에이션/내러티브 중요도이지 주가 변동폭이 아니다. 이벤트
   날짜 전후 등락률은 참고 정보로만 계산해 붙인다(필터링·정렬에는 쓰지 않는다).
 """
+import asyncio
+from fastapi import HTTPException
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -17,16 +19,9 @@ import yfinance as yf
 from services.valuation import get_stock_code
 from utils import search_naver_news, call_groq
 
-MAX_EVENTS = 8
-NEWS_PAGE_SIZE = 100        # Naver 뉴스 검색 1회 호출당 최대 결과 수
-NEWS_MAX_PAGES = 10         # date순 페이지네이션 최대 횟수 (API 상한 start<=1000까지 전부 사용)
-NEWS_LOOKBACK_DAYS = 365    # 최근 1년 이내 기사만 사용
-MAX_ARTICLES_FOR_PROMPT = 80  # Groq 무료 티어 분당 토큰 한도(TPM 12,000)를 넘기지 않도록 제한
-SUMMARY_MAX_CHARS = 70      # 프롬프트용 기사 요약 길이 제한 (토큰 절약)
-PRICE_WINDOW_BEFORE = 1     # 이벤트 날짜 기준 참고용 가격 변동 계산 구간(거래일)
-PRICE_WINDOW_AFTER = 3
-
-CATEGORY_OPTIONS = "실적/밸류에이션/산업뉴스/규제/공급망/경쟁사/신사업/기타"
+from config import (MAX_EVENTS, NEWS_PAGE_SIZE, NEWS_MAX_PAGES, NEWS_LOOKBACK_DAYS,
+                    MAX_ARTICLES_FOR_PROMPT, SUMMARY_MAX_CHARS, PRICE_WINDOW_BEFORE,
+                    PRICE_WINDOW_AFTER, CATEGORY_OPTIONS)
 
 SELECTION_SYSTEM_INSTRUCTION = f"""당신은 한국 주식시장을 분석하는 애널리스트입니다.
 아래는 특정 종목에 대한 최근 뉴스 기사 목록입니다(번호가 매겨져 있음).
@@ -176,14 +171,18 @@ async def _select_events(company_name: str, articles: list[dict]) -> list[dict]:
     prompt = _build_article_list_prompt(company_name, articles)
     result = await call_groq(prompt, system_instruction=SELECTION_SYSTEM_INSTRUCTION)
     parsed = _parse_json_object(result)
-    if not parsed:
-        return []
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("events"), list):
+        raise HTTPException(502, "AI 사건 선별에 실패했습니다. 다시 요청해주세요.")
 
     events = []
     for candidate in parsed.get("events", [])[:MAX_EVENTS]:
-        indices = [i for i in candidate.get("article_indices", []) if 1 <= i <= len(articles)]
+        if not isinstance(candidate, dict) or not isinstance(candidate.get('article_indices'), list):
+            raise HTTPException(502, 'AI 사건 응답 형식이 올바르지 않습니다.')
+        if not all(isinstance(candidate.get(k), str) and candidate[k].strip() for k in ('headline', 'summary')):
+            raise HTTPException(502, 'AI 사건 응답에 설명이 없습니다.')
+        indices = [i for i in candidate['article_indices'] if type(i) is int and 1 <= i <= len(articles)]
         if not indices:
-            continue
+            raise HTTPException(502, 'AI 사건 응답의 기사 출처를 확인할 수 없습니다.')
         referenced = [articles[i - 1] for i in indices]
         referenced.sort(key=lambda a: a["_parsed_date"])
         earliest = referenced[0]
@@ -201,7 +200,7 @@ async def _select_events(company_name: str, articles: list[dict]) -> list[dict]:
 
 async def analyze_price_events(company_name: str) -> dict:
     """종목의 밸류에이션·내러티브 관점 유의미 사건 목록을 반환합니다."""
-    hist = _fetch_price_history(company_name)
+    hist = await asyncio.to_thread(_fetch_price_history, company_name)
 
     articles = await _gather_recent_articles(company_name)
     if not articles:

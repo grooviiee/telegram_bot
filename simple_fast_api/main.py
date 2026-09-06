@@ -22,8 +22,7 @@ from routes.system import router as system_router
 # --- 환경 변수 검증 ---
 if not DART_API_KEY:
     raise ValueError("DART_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요.")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인해주세요.")
+
 
 # --- Telegram 봇 & 스케줄러 ---
 bot_app = telegram_bot.create_bot_application() if TELEGRAM_BOT_TOKEN else None

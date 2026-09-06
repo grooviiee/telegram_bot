@@ -47,7 +47,6 @@ interface DividendPageProps {
 export default function DividendChartPage(rawProps: any) {
   const props = rawProps as DividendPageProps;
   const {
-    favorites: _favorites,
     toggleFavorite,
     isFavorite,
     initialCompany,

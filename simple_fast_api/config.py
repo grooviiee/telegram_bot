@@ -85,3 +85,38 @@ IMPORTANT_FILING_KEYWORDS = [
 
 # --- 연도 범위 ---
 YEAR_RANGE = 5  # 최근 N개년 재무 데이터 조회
+
+# --- 분석 신뢰성 및 호출 정책 ---
+CACHE_SCHEMA_VERSION = 2
+DATA_CACHE_TTL_SECONDS = 24 * 60 * 60
+MARKET_CACHE_TTL_SECONDS = 15 * 60
+AI_CACHE_TTL_SECONDS = 24 * 60 * 60
+NEWS_CACHE_TTL_SECONDS = 30 * 60
+DART_VIEWER_URL = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo="
+ANALYSIS_POLICY_VERSION = "2026-09-reliability-v1"
+SCORE_WEIGHTS = {
+    "growth": 0.25, "profitability": 0.25, "financial_health": 0.20,
+    "dividend": 0.10, "valuation": 0.20,
+}
+AI_EVIDENCE_RULES = """
+신뢰성 규칙:
+- 수치와 계산은 제공된 정량 결과를 사용하고 없는 값은 추정하지 마세요.
+- 데이터 부족은 무배당, 0, 중립 평가를 의미하지 않습니다. 평가 불가라고 표시하세요.
+- 공시 목록은 제목과 접수 정보뿐입니다. 본문을 읽은 것처럼 내용이나 영향을 단정하지 마세요.
+- 출처, 재무 기준연도, 수집시각을 구분하세요. 수집시각은 시세 체결시각이 아닙니다.
+- 동종업계 데이터가 없으면 업계 대비 우위/저평가를 단정하지 마세요.
+- FCF는 오너이익의 근사치이며 유지보수 CapEx를 분리한 값이 아닙니다.
+- 사실과 해석, 가정을 명확히 구분하고 데이터가 부족한 가격 추정은 하지 마세요.
+"""
+
+# --- 주요 사건 분석 ---
+MAX_EVENTS = 8
+NEWS_PAGE_SIZE = 100        # Naver 뉴스 검색 1회 호출당 최대 결과 수
+NEWS_MAX_PAGES = 10         # date순 페이지네이션 최대 횟수 (API 상한 start<=1000까지 전부 사용)
+NEWS_LOOKBACK_DAYS = 365    # 최근 1년 이내 기사만 사용
+MAX_ARTICLES_FOR_PROMPT = 80  # Groq 무료 티어 분당 토큰 한도(TPM 12,000)를 넘기지 않도록 제한
+SUMMARY_MAX_CHARS = 70      # 프롬프트용 기사 요약 길이 제한 (토큰 절약)
+PRICE_WINDOW_BEFORE = 1     # 이벤트 날짜 기준 참고용 가격 변동 계산 구간(거래일)
+PRICE_WINDOW_AFTER = 3
+
+CATEGORY_OPTIONS = "실적/밸류에이션/산업뉴스/규제/공급망/경쟁사/신사업/기타"

@@ -377,8 +377,11 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
             "financial_health": "재무건전성", "dividend": "배당",
             "valuation": "밸류에이션",
         }
-        lines = [f"📊 <b>{name} 정량 투자 스코어</b>\n", f"<b>종합: {score}점 / 100 ({grade})</b>\n"]
+        lines = [f"📊 <b>{name} 정량 투자 스코어</b>\n", f"<b>종합: {score}점 / 100 ({grade})</b>\n" if score is not None else "<b>종합: 평가 불가</b>\n"]
         for key, cat in data.get("categories", {}).items():
+            if cat['score'] is None:
+                lines.append(f"  {cat_labels.get(key, key)}: 평가 불가")
+                continue
             bar = "█" * round(cat["score"] / 10) + "░" * (10 - round(cat["score"] / 10))
             label = cat_labels.get(key, key)
             lines.append(f"  {label}: {bar} {cat['score']}점 ({cat['grade']})")
@@ -601,9 +604,12 @@ async def cmd_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "valuation": "밸류에이션",
     }
     lines = [f"📊 <b>{name} 정량 투자 스코어</b>\n"]
-    lines.append(f"<b>종합: {score}점 / 100 ({grade})</b>\n")
+    lines.append(f"<b>종합: {score}점 / 100 ({grade})</b>\n" if score is not None else "<b>종합: 데이터 부족 — 평가 불가</b>\n")
 
     for key, cat in data.get("categories", {}).items():
+        if cat['score'] is None:
+            lines.append(f"  {cat_labels.get(key, key)}: 평가 불가")
+            continue
         bar = "█" * round(cat["score"] / 10) + "░" * (10 - round(cat["score"] / 10))
         label = cat_labels.get(key, key)
         lines.append(f"  {label}: {bar} {cat['score']}점 ({cat['grade']})")
@@ -641,7 +647,7 @@ async def cmd_insider(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ai_analysis = _md_to_html(data.get("ai_analysis", ""))
 
     await msg.delete()
-    await _send_long(update, message_text + "\n<b>── AI 분석 ──</b>\n" + ai_analysis)
+    await _send_long(update, message_text + ("\n<b>── AI 분석 ──</b>\n" + ai_analysis if ai_analysis else ""))
 
 
 # -------------------------------------------------------------------
@@ -835,7 +841,7 @@ async def send_filing_alerts(bot: Bot) -> None:
     for item in watched:
         company = item["company"]
         try:
-            corp_code = get_corp_code(company)
+            corp_code = await asyncio.to_thread(get_corp_code, company)
         except HTTPException:
             print(f"[공시알림] {company} 회사코드 조회 실패, 건너뜀")
             continue

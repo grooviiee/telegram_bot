@@ -9,6 +9,7 @@ import {
   Title, Tooltip, Legend, Filler,
 } from 'chart.js';
 import { Bar, Line } from 'react-chartjs-2';
+import { useDartData } from '@/lib/useDartData';
 import { ProgressIndicator } from '@/components/ProgressIndicator';
 
 ChartJS.register(
@@ -41,13 +42,15 @@ interface ValuationHistory {
 }
 
 interface ScoreCategory {
-  score: number;
+  score: number | null;
   grade: string;
 }
 
 interface ScoreData {
-  total_score: number;
+  total_score: number | null;
   total_grade: string;
+  data_quality?: { warnings: string[]; sources: Record<string, { retrieved_at: string; fiscal_years: number[] }> };
+  coverage?: number;
   categories: {
     growth: ScoreCategory;
     profitability: ScoreCategory;
@@ -80,7 +83,7 @@ const STEPS = [
   { label: '기업 코드 조회 중',           after: 0 },
   { label: '5개년 재무 데이터 수집 중',   after: 1_500 },
   { label: '밸류에이션 및 스코어 계산 중', after: 3_500 },
-  { label: 'AI 버핏 리포트 생성 중',      after: 6_000 },
+  { label: '정량 분석 결과 준비 중',      after: 6_000 },
 ];
 
 // ── 유틸 ──────────────────────────────────────────────────────────────────
@@ -177,6 +180,12 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
   const [resolvedName, setResolvedName] = useState('');
   const [data, setData] = useState<BuffettData | null>(null);
   const fetchedRef = useRef<string | null>(null);
+  const reportData = useDartData<{ report: string }>({
+    buildPath: (n) => `/buffett-report/${n}`,
+    extractData: (json) => ({ report: (json as { report: string }).report }),
+    timeout: 180_000,
+    autoFetch: false,
+  }, resolvedName);
 
   const fetchData = useCallback(async (name?: string) => {
     const target = (name ?? companyName).trim();
@@ -190,28 +199,27 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
 
     try {
       const enc = encodeURIComponent(target);
-      const [finRes, valRes, scoreRes, reportRes] = await Promise.all([
+      const [finRes, valRes, scoreRes] = await Promise.all([
         fetch(`${API_BASE}/financials/${enc}`,       { signal: AbortSignal.timeout(60_000) }),
         fetch(`${API_BASE}/valuation/${enc}`,         { signal: AbortSignal.timeout(60_000) }),
         fetch(`${API_BASE}/score/${enc}`,             { signal: AbortSignal.timeout(60_000) }),
-        fetch(`${API_BASE}/buffett-report/${enc}`,    { signal: AbortSignal.timeout(180_000) }),
       ]);
 
-      if (!finRes.ok || !valRes.ok || !scoreRes.ok || !reportRes.ok)
+      if (!finRes.ok || !scoreRes.ok)
         throw new Error('일부 데이터 조회에 실패했습니다.');
 
-      const [finJson, valJson, scoreJson, reportJson] = await Promise.all([
-        finRes.json(), valRes.json(), scoreRes.json(), reportRes.json(),
+      const [finJson, valJson, scoreJson] = await Promise.all([
+        finRes.json(), valRes.ok ? valRes.json() : Promise.resolve({ history: [] }), scoreRes.json(),
       ]) as any[];
 
-      setResolvedName(reportJson.company_name ?? target);
+      setResolvedName(finJson.company_name ?? target);
       setData({
         financials: finJson.financials ?? [],
         valHistory: valJson.history ?? [],
         score: scoreJson,
-        report: reportJson.report ?? '',
+        report: '',
       });
-      setMessage(`${reportJson.company_name} 버핏 리포트 생성 완료${reportJson.cached ? ' (캐시)' : ''}`);
+      setMessage(`${finJson.company_name} 정량 분석 완료 — AI 해석은 아래에서 요청할 수 있습니다.`);
       onSearched?.();
     } catch (e: any) {
       fetchedRef.current = null;
@@ -343,9 +351,9 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
         label: '카테고리 점수 (100점)',
         data: scoreCategories.map(([, v]) => v.score),
         backgroundColor: scoreCategories.map(([, v]) =>
-          v.score >= 75 ? 'rgba(16, 185, 129, 0.75)' :
-          v.score >= 55 ? 'rgba(59, 130, 246, 0.75)' :
-          v.score >= 40 ? 'rgba(245, 158, 11, 0.75)' :
+          (v.score ?? -1) >= 75 ? 'rgba(16, 185, 129, 0.75)' :
+          (v.score ?? -1) >= 55 ? 'rgba(59, 130, 246, 0.75)' :
+          (v.score ?? -1) >= 40 ? 'rgba(245, 158, 11, 0.75)' :
                           'rgba(239, 68, 68, 0.75)'
         ),
         borderRadius: 4,
@@ -467,7 +475,7 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
             <div className="col-span-2 bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-col items-center justify-center">
               <p className="text-xs text-amber-600 font-semibold mb-1">종합 투자 점수</p>
               <p className={`text-4xl font-bold ${gradeColor(data.score.total_grade)}`}>
-                {data.score.total_score.toFixed(0)}
+                {data.score.total_score?.toFixed(0) ?? '평가 불가'}
               </p>
               <p className={`text-sm font-semibold mt-1 ${gradeColor(data.score.total_grade)}`}>
                 {data.score.total_grade} · {gradeLabel[data.score.total_grade]}
@@ -477,7 +485,7 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
             {Object.entries(data.score.categories).map(([key, cat]) => (
               <div key={key} className="bg-white border border-gray-100 rounded-xl p-3 flex flex-col items-center shadow-sm">
                 <p className="text-xs text-gray-500 mb-1">{CAT_LABELS[key]}</p>
-                <p className={`text-2xl font-bold ${gradeColor(cat.grade)}`}>{cat.score.toFixed(0)}</p>
+                <p className={`text-2xl font-bold ${gradeColor(cat.grade)}`}>{cat.score?.toFixed(0) ?? '평가 불가'}</p>
                 <p className={`text-xs font-semibold ${gradeColor(cat.grade)}`}>{cat.grade}</p>
               </div>
             ))}
@@ -501,6 +509,13 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
             </div>
           )}
 
+          <div className="text-sm text-gray-600 bg-white rounded-xl p-4">
+            <p>평가 가능 영역: {data.score.coverage ?? 0}% · 일부 영역이 누락되면 종합 점수를 산출하지 않습니다.</p>
+            {data.score.data_quality?.warnings.map((warning) => <p key={warning}>{warning}</p>)}
+            {Object.entries(data.score.data_quality?.sources ?? {}).map(([name, source]) => (
+              <p key={name}>{name}: 기준연도 {source.fiscal_years.join(', ')} · 조회 {source.retrieved_at}</p>
+            ))}
+          </div>
           {/* ── 차트 대시보드 ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-6">
 
@@ -563,7 +578,16 @@ export default function BuffettPage({ toggleFavorite, isFavorite, initialCompany
                 {resolvedName} — AI 버핏 스타일 분석
               </h2>
             </div>
-            <div>{renderMarkdown(data.report)}</div>
+            <button
+              onClick={() => reportData.fetchData(resolvedName)}
+              disabled={reportData.loading || !!reportData.data}
+              className="px-4 py-2 mb-3 bg-amber-600 text-white rounded-lg disabled:opacity-50"
+            >
+              {reportData.loading ? '분석 중...' : reportData.data ? 'AI 분석 완료' : 'AI 해석 생성'}
+            </button>
+            <p className="text-sm text-gray-500 mb-3">정량 조회에는 AI를 사용하지 않습니다. 사업 경쟁력과 위험에 대한 해석이 필요할 때 생성하세요.</p>
+            <p className="text-sm mb-3" role="status">{reportData.message}</p>
+            <div>{reportData.data && renderMarkdown(reportData.data.report)}</div>
           </div>
         </>
       )}

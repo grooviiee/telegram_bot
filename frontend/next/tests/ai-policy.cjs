@@ -1,0 +1,41 @@
+const { chromium } = require('playwright');
+const baseURL = process.env.TEST_BASE_URL;
+if (!baseURL) throw Error('TEST_BASE_URL must point to a local development server');
+(async () => {
+ const browser = await chromium.launch({headless:true});
+ const page = await browser.newPage();
+ const errors=[]; page.on('pageerror', e=>errors.push(e.message));
+ let aiCalls=0;
+ await page.route('**/*', async route => {
+  const url = new URL(route.request().url());
+  if (url.origin === new URL(baseURL).origin) return route.continue();
+  const name='테스트회사';
+  let body;
+  if (url.pathname.startsWith('/financials/')) body={company_name:name,financials:[{year:2025,revenue:1000,operating_income:100,net_income:80,roe:10,operating_margin:10,debt_ratio:50,fcf:null,equity:800,total_assets:1200}]};
+  else if(url.pathname.startsWith('/valuation/')) body={company_name:name,history:[]};
+  else if(url.pathname.startsWith('/score/')) body={company_name:name,total_score:null,total_grade:'N/A',coverage:80,categories:{growth:{score:60,grade:'B'},dividend:{score:null,grade:'N/A'}},key_signals:[],data_quality:{warnings:['배당 데이터 부족'],sources:{}}};
+  else if(url.pathname.startsWith('/buffett-report/') || url.pathname.startsWith('/report/')) { aiCalls++; body={company_name:name,report:'근거 기반 AI 해석입니다.'}; }
+  else return route.abort();
+  await route.fulfill({status:200,contentType:'application/json',headers:{'access-control-allow-origin':'*'},body:JSON.stringify(body)});
+ });
+ await page.addInitScript(() => localStorage.setItem('dart_favorites', JSON.stringify([{company:'테스트회사',page:'report'}])));
+ await page.goto(baseURL);
+ await page.getByRole('button',{name:'🧙 버핏 리포트',exact:true}).click();
+ await page.getByPlaceholder('회사명 입력 (예: 삼성전자)').fill('테스트회사');
+ await page.getByPlaceholder('회사명 입력 (예: 삼성전자)').press('Enter');
+ await page.getByRole('button',{name:'AI 해석 생성'}).waitFor({timeout:10000}).catch(async e=>{ console.log((await page.locator('body').innerText()).slice(0,3000)); console.log(errors); throw e; });
+ if(aiCalls!==0) throw Error('Unexpected AI on quantitative search');
+ await page.getByRole('button',{name:'AI 해석 생성'}).click();
+ await page.getByText('근거 기반 AI 해석입니다.').waitFor();
+ if(aiCalls!==1) throw Error('Expected exactly one inference');
+ await page.getByRole('button',{name:/즐겨찾기/}).click();
+ await page.getByRole('button',{name:'report',exact:true}).click();
+ await page.getByPlaceholder('회사명 입력 (예: 삼성전자)').waitFor();
+ if(aiCalls!==1) throw Error('Unexpected AI on report navigation');
+ await page.getByRole('button',{name:'리포트 생성',exact:true}).click();
+ await page.getByText('근거 기반 AI 해석입니다.').waitFor();
+ if(aiCalls!==2) throw Error('Expected one explicit general report call');
+ if(errors.length) throw Error(errors.join('\n'));
+ console.log(JSON.stringify({quantitative_ai_calls:0,explicit_inference_calls:2,navigation_ai_calls:0,nullable_score_render:'PASS',browser_errors:0}));
+ await browser.close();
+})().catch(e=>{console.error(e.message);process.exit(1)});

@@ -1,7 +1,7 @@
 """주가 기반 밸류에이션 지표 계산 모듈."""
 import xml.etree.ElementTree as ET
 import yfinance as yf
-from config import REPORTS_DIR, DART_API_KEY, DART_CORP_CODE_URL
+from config import REPORTS_DIR, DART_API_KEY, DART_CORP_CODE_URL, YEAR_RANGE
 from services.dart import fetch_dart_financials, get_corp_code
 
 
@@ -24,7 +24,7 @@ def get_stock_code(company_name: str) -> str | None:
     return None
 
 
-def fetch_valuation(company_name: str) -> dict:
+def fetch_valuation(company_name: str, financials: list[dict] | None = None) -> dict:
     """
     yfinance + DART 데이터를 결합해 밸류에이션 지표를 반환합니다.
 
@@ -61,14 +61,16 @@ def fetch_valuation(company_name: str) -> dict:
     shares = info.get('sharesOutstanding')
     market_cap = price * shares if shares else info.get('marketCap')
 
-    # 3. DART 최근 3개년 재무 데이터
-    corp_code = get_corp_code(company_name)
-    current_year = datetime.now().year
-    yearly = []
-    for y in range(current_year - 1, current_year - 4, -1):
-        f = fetch_dart_financials(corp_code, str(y))
-        if f:
-            yearly.append(f)
+    # 공통 수집 경로에서 받은 동일 재무 스냅샷을 우선 사용합니다.
+    if financials is None:
+        corp_code = get_corp_code(company_name)
+        current_year = datetime.now().year
+        financials = []
+        for y in range(current_year - 1, current_year - YEAR_RANGE - 2, -1):
+            f = fetch_dart_financials(corp_code, str(y))
+            if f:
+                financials.append(f)
+    yearly = sorted(financials, key=lambda f: f['year'], reverse=True)[:3]
 
     if not yearly:
         raise HTTPException(status_code=404, detail=f"'{company_name}'의 재무 데이터를 찾을 수 없습니다.")
@@ -87,7 +89,7 @@ def fetch_valuation(company_name: str) -> dict:
     per = safe_round(price, eps) if eps and eps > 0 else None
     pbr = safe_round(market_cap, equity) if market_cap and equity else None
     psr = safe_round(market_cap, revenue) if market_cap and revenue else None
-    ev  = (market_cap + net_debt) if (market_cap and net_debt is not None) else market_cap
+    ev  = (market_cap + net_debt) if (market_cap and net_debt is not None) else None
     ev_ebit = safe_round(ev, op_income) if ev and op_income and op_income > 0 else None
 
     # 5. 연도별 이력 (주가 추정: EPS * PER은 순환논리라 당기 BPS/EPS 기준)
@@ -101,7 +103,7 @@ def fetch_valuation(company_name: str) -> dict:
         y_per    = safe_round(price, y_eps) if y_eps and y_eps > 0 else None
         y_pbr    = safe_round(market_cap, y_eq) if market_cap and y_eq else None
         y_psr    = safe_round(market_cap, y_rev) if market_cap and y_rev else None
-        y_ev     = (market_cap + y_nd) if (market_cap and y_nd is not None) else market_cap
+        y_ev     = (market_cap + y_nd) if (market_cap and y_nd is not None) else None
         y_ev_ebit = safe_round(y_ev, y_op) if y_ev and y_op and y_op > 0 else None
         history.append({
             'year': f['year'],
@@ -123,4 +125,5 @@ def fetch_valuation(company_name: str) -> dict:
         'ev_ebit': ev_ebit,
         'latest_year': latest['year'],
         'history': history,
+        'history_basis': '현재 주가·시가총액을 각 연도 실적에 적용한 비교값 (과거 시세 아님)',
     }

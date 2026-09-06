@@ -2,37 +2,14 @@
 import asyncio
 from datetime import datetime, timedelta
 
-from config import IMPORTANT_FILING_KEYWORDS
-from utils import call_gemini
+from config import IMPORTANT_FILING_KEYWORDS, DART_VIEWER_URL
+from html import escape
+from urllib.parse import quote
 
 
 def _is_important_filing(report_nm: str) -> bool:
     """투자자에게 중요한 공시인지 판단합니다."""
     return any(kw in report_nm for kw in IMPORTANT_FILING_KEYWORDS)
-
-
-async def summarize_filing_with_gemini(company_name: str, report_nm: str, rcept_dt: str) -> str:
-    """Gemini를 이용해 공시를 투자자 관점에서 간략히 요약합니다."""
-    prompt = f"""당신은 한국 주식 투자 전문가입니다.
-
-아래 공시가 방금 접수되었습니다. 개인 투자자 관점에서 이 공시가 어떤 의미인지 3~4문장으로 간결하게 설명해주세요.
-
-- 회사명: {company_name}
-- 공시명: {report_nm}
-- 접수일: {rcept_dt}
-
-답변 형식:
-📌 **한 줄 요약**: (이 공시가 무엇인지 한 줄로)
-💡 **투자자 관점**: (주가/실적/지배구조에 미칠 영향 2~3문장)
-⚠️ **주의사항**: (있다면 투자자가 확인해야 할 점 한 줄, 없으면 생략)
-
-간결하게, 핵심만 답변하세요. 불필요한 면책 문구는 생략하세요."""
-
-    return await call_gemini(
-        prompt,
-        generation_config={"temperature": 0.3, "maxOutputTokens": 512},
-        timeout=30,
-    )
 
 
 async def check_new_filings(corp_code: str, company_name: str) -> list[dict]:
@@ -93,14 +70,14 @@ async def build_filing_alert_message(company_name: str, filing: dict) -> str:
     else:
         rcept_dt_fmt = rcept_dt
 
-    dart_url = f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
+    dart_url = DART_VIEWER_URL + quote(rcept_no, safe="")
 
-    summary = await summarize_filing_with_gemini(company_name, report_nm, rcept_dt_fmt)
+    summary = "새 공시가 접수되었습니다. 구체적인 변경 수치와 내용은 원문에서 확인해주세요."
 
     return (
-        f"🔔 <b>공시 알림 — {company_name}</b>\n"
-        f"📄 {report_nm}\n"
-        f"📅 {rcept_dt_fmt}\n\n"
+        f"🔔 <b>공시 알림 — {escape(company_name)}</b>\n"
+        f"📄 {escape(report_nm)}\n"
+        f"📅 {escape(rcept_dt_fmt)}\n\n"
         f"{summary}\n\n"
         f"<a href=\"{dart_url}\">📎 DART 원문 보기</a>"
     )
