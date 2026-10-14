@@ -6,3 +6,9 @@ simple_fast_api/.cache/
 simple_fast_api/bot_data.db
 simple_fast_api/dart_reports/
 simple_fast_api/.venv/
+
+.env
+.env.*
+!.env.example
+.venv/
+.pytest_cache/

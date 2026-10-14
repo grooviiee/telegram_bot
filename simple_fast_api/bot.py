@@ -10,6 +10,7 @@ import os
 import re
 import asyncio
 import html
+import logging
 import aiohttp
 from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
@@ -17,9 +18,11 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, filters, CallbackQueryHandler,
 )
 from telegram.constants import ParseMode
+from telegram.error import Forbidden
 
 import database
-from config import TELEGRAM_BOT_TOKEN
+from config import TELEGRAM_BOT_TOKEN, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
+from services import github_trending
 from utils import fmt_krw
 
 # -------------------------------------------------------------------
@@ -430,6 +433,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "🕵️ /insider [회사명] — 내부자 거래 현황 + AI 분석\n"
         "💬 /chat [회사명]    — AI 상담 시작\n"
         "          /end       — 상담 종료\n\n"
+        "<b>── GitHub 핫 프로젝트 ──</b>\n"
+        "🔥 /today — 오늘의 프로젝트 최대 3개\n"
+        "🔔 /trend_on — 매일 09:00 KST 소개 신청 (개인 채팅)\n"
+        "🔕 /trend_off — 소개 알림 해제\n\n"
         "<b>── 즐겨찾기 ──</b>\n"
         "⭐ /fav_add [회사명] [dividend|profit|health]\n"
         "🗑 /fav_del [회사명] [dividend|profit|health]\n"
@@ -907,6 +914,62 @@ async def send_daily_notification(bot: Bot) -> None:
 # 봇 애플리케이션 팩토리
 # -------------------------------------------------------------------
 
+async def cmd_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """현재 채팅에 오늘의 GitHub 소개를 발송합니다."""
+    chat_id = update.effective_chat.id
+    try:
+        await deliver_trending(ctx.bot, chat_id, scheduled=False)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("GitHub 조회/발송 실패 (%s)", type(exc).__name__)
+        await update.effective_message.reply_text("GitHub 소개를 가져오지 못했습니다. 잠시 후 /today를 다시 입력해주세요.")
+
+
+async def cmd_trend_on(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """개인 채팅에서 GitHub 정기 소개를 신청합니다."""
+    if update.effective_chat.type != "private":
+        await update.effective_message.reply_text("정기 소개 신청은 봇과의 개인 채팅에서 /trend_on을 입력해주세요.")
+        return
+    await database.set_trending_subscription(update.effective_chat.id, True)
+    await update.effective_message.reply_text("매일 오전 9시(KST) GitHub 핫 프로젝트를 소개합니다. /today로 바로 보기 · /trend_off로 해제")
+
+
+async def cmd_trend_off(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """현재 개인 채팅의 GitHub 정기 소개를 해제합니다."""
+    if update.effective_chat.type != "private":
+        await update.effective_message.reply_text("봇과의 개인 채팅에서 /trend_off를 입력해주세요.")
+        return
+    await database.set_trending_subscription(update.effective_chat.id, False)
+    await update.effective_message.reply_text("GitHub 정기 소개를 해제했습니다. /today는 계속 사용할 수 있습니다.")
+
+
+async def deliver_trending(bot: Bot, chat_id: int, *, scheduled: bool) -> None:
+    """채팅별 발송을 직렬화하고 성공한 경우에만 중복 제외 기록을 남깁니다."""
+    async with github_trending.chat_lock(chat_id):
+        now = github_trending.now_kst()
+        if scheduled and await database.trending_was_delivered(chat_id, now.date().isoformat()):
+            return
+        digest = await github_trending.build_digest(chat_id, now)
+        await bot.send_message(chat_id=chat_id, text=github_trending.format_digest(digest),
+                               parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await database.mark_trending_delivered(chat_id, digest['day'],
+                                               [p['name'] for p in digest['projects']])
+
+
+async def send_trending_notifications(bot: Bot) -> None:
+    """오전 9시 이후 신청자에게 미발송 소개를 전송하며 실패는 다음 실행에 재시도합니다."""
+    now = github_trending.now_kst()
+    if (now.hour, now.minute) < (TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE):
+        return
+    for chat_id in await database.get_trending_subscribers():
+        try:
+            await deliver_trending(bot, chat_id, scheduled=True)
+        except Forbidden:
+            await database.set_trending_subscription(chat_id, False)
+            logging.getLogger(__name__).info("GitHub 구독 해제: 봇 접근이 거부된 채팅")
+        except Exception as exc:
+            logging.getLogger(__name__).warning("GitHub 정기 발송 실패 (%s)", type(exc).__name__)
+
+
 def create_bot_application() -> Application:
     token = TELEGRAM_BOT_TOKEN
     if not token:
@@ -928,6 +991,11 @@ def create_bot_application() -> Application:
         per_chat=True,
     )
     app.add_handler(chat_conv)
+
+    # GitHub 소개
+    app.add_handler(CommandHandler("today", cmd_today))
+    app.add_handler(CommandHandler("trend_on", cmd_trend_on))
+    app.add_handler(CommandHandler("trend_off", cmd_trend_off))
 
     # 기업 분석
     app.add_handler(CommandHandler("start",     cmd_start))
