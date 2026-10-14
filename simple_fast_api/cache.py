@@ -116,3 +116,7 @@ insider_cache = DiskCache(os.path.join(_CACHE_DIR, "insider"))
 insider_ai_cache = DiskCache(os.path.join(_CACHE_DIR, "insider_ai"), ttl=AI_CACHE_TTL_SECONDS)
 
 score_cache = DiskCache(os.path.join(_CACHE_DIR, "score"), ttl=MARKET_CACHE_TTL_SECONDS)
+
+# GitHub 수집/소개 결과는 날짜 키로 공유하여 구독자별 외부 호출을 줄입니다.
+github_trending_cache = DiskCache(os.path.join(_CACHE_DIR, "github_trending"), ttl=DATA_CACHE_TTL_SECONDS)
+github_summary_cache = DiskCache(os.path.join(_CACHE_DIR, "github_summary"), ttl=AI_CACHE_TTL_SECONDS)

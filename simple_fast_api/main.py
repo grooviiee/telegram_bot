@@ -10,7 +10,8 @@ from apscheduler.triggers.cron import CronTrigger
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
-from config import DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN
+from config import (DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN,
+                    TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE, TRENDING_RETRY_MINUTES, TRENDING_TIMEZONE)
 import database
 import bot as telegram_bot
 from services.cache_warmup import warm_popular_companies
@@ -18,6 +19,7 @@ from routes.data import router as data_router
 from routes.ai import router as ai_router
 from routes.legacy import router as legacy_router
 from routes.system import router as system_router
+from routes.github import router as github_router
 
 # --- 환경 변수 검증 ---
 if not DART_API_KEY:
@@ -71,6 +73,15 @@ async def lifespan(app: FastAPI):
             id="cache_warmup",
             replace_existing=True,
         )
+        scheduler.add_job(
+            telegram_bot.send_trending_notifications,
+            CronTrigger(hour=TRENDING_SEND_HOUR, minute=TRENDING_SEND_MINUTE, timezone=TRENDING_TIMEZONE),
+            args=[bot_app.bot], id="github_trending_daily", replace_existing=True,
+        )
+        scheduler.add_job(
+            telegram_bot.send_trending_notifications, "interval", minutes=TRENDING_RETRY_MINUTES,
+            args=[bot_app.bot], id="github_trending_retry", replace_existing=True,
+        )
         scheduler.start()
         print("[Scheduler] 일일 알림 (09:00 KST) + 공시 감지 (30분) + 인기 종목 캐시 워밍업 (05:30 KST) 등록 완료")
     else:
@@ -111,6 +122,7 @@ app.include_router(data_router)
 app.include_router(ai_router)
 app.include_router(legacy_router)
 app.include_router(system_router)
+app.include_router(github_router)
 
 # --- Matplotlib 한글 폰트 ---
 font_path = None

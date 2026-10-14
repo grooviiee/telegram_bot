@@ -4,9 +4,8 @@ SQLite 기반 사용자 즐겨찾기 저장소.
 """
 
 import aiosqlite
-import os
-
-DB_PATH = os.path.join(os.path.dirname(__file__), "bot_data.db")
+import json
+from config import DB_PATH
 
 
 async def init_db() -> None:
@@ -37,6 +36,22 @@ async def init_db() -> None:
                 search_count     INTEGER NOT NULL DEFAULT 0,
                 last_searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
+        """)
+        await db.executescript("""
+            CREATE TABLE IF NOT EXISTS trending_subscriptions (
+                chat_id INTEGER PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS trending_editions (
+                chat_id INTEGER, day TEXT, payload TEXT NOT NULL,
+                PRIMARY KEY(chat_id, day)
+            );
+            CREATE TABLE IF NOT EXISTS trending_deliveries (
+                chat_id INTEGER, day TEXT, PRIMARY KEY(chat_id, day)
+            );
+            CREATE TABLE IF NOT EXISTS trending_seen (
+                chat_id INTEGER, name TEXT, day TEXT NOT NULL,
+                PRIMARY KEY(chat_id, name)
+            );
         """)
         await db.commit()
     print(f"[DB] 초기화 완료: {DB_PATH}")
@@ -164,3 +179,59 @@ async def get_all_favorites_grouped() -> dict[int, list[tuple[str, str]]]:
     for user_id, company, analysis_type in rows:
         grouped.setdefault(int(user_id), []).append((company, analysis_type))
     return grouped
+
+
+async def set_trending_subscription(chat_id: int, enabled: bool) -> None:
+    """개인 채팅의 GitHub 소개 정기 발송을 신청하거나 해제합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        if enabled:
+            await db.execute("INSERT OR IGNORE INTO trending_subscriptions VALUES (?)", (chat_id,))
+        else:
+            await db.execute("DELETE FROM trending_subscriptions WHERE chat_id=?", (chat_id,))
+        await db.commit()
+
+
+async def get_trending_subscribers() -> list[int]:
+    """GitHub 소개를 신청한 채팅 ID를 반환합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT chat_id FROM trending_subscriptions ORDER BY chat_id")
+        return [row[0] for row in await cursor.fetchall()]
+
+
+async def get_trending_edition(chat_id: int, day: str) -> dict | None:
+    """해당 채팅의 당일 소개 캐시를 반환합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT payload FROM trending_editions WHERE chat_id=? AND day=?", (chat_id, day))
+        row = await cursor.fetchone()
+        return json.loads(row[0]) if row else None
+
+
+async def save_trending_edition(chat_id: int, day: str, payload: dict) -> None:
+    """당일 소개 캐시를 저장합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO trending_editions VALUES (?,?,?)",
+                         (chat_id, day, json.dumps(payload, ensure_ascii=False)))
+        await db.commit()
+
+
+async def get_trending_seen(chat_id: int, cutoff: str) -> set[str]:
+    """최근 지정 기간에 성공적으로 발송한 저장소를 반환합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT name FROM trending_seen WHERE chat_id=? AND day>=?", (chat_id, cutoff))
+        return {row[0] for row in await cursor.fetchall()}
+
+
+async def trending_was_delivered(chat_id: int, day: str) -> bool:
+    """해당 날짜의 소개 발송 성공 여부를 확인합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("SELECT 1 FROM trending_deliveries WHERE chat_id=? AND day=?", (chat_id, day))
+        return await cursor.fetchone() is not None
+
+
+async def mark_trending_delivered(chat_id: int, day: str, names: list[str]) -> None:
+    """발송 성공 후 일간 발송과 저장소 중복 제외 기록을 함께 저장합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR IGNORE INTO trending_deliveries VALUES (?,?)", (chat_id, day))
+        await db.executemany("INSERT OR REPLACE INTO trending_seen VALUES (?,?,?)",
+                             [(chat_id, name, day) for name in names])
+        await db.commit()
