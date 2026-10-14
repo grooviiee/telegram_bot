@@ -1,4 +1,5 @@
 import requests
+import os
 import json
 from datetime import datetime
 
@@ -58,11 +59,11 @@ def fetch_dividend_data(crtfc_key: str, corp_code: str, report_code: str) -> lis
             else:
                 print(f"API Error for {bsns_year}: {response_body.get('message', 'Unknown error')}")
         except requests.exceptions.RequestException as e:
-            print(f'HTTP Error for {bsns_year}: {e}')
+            print(f'HTTP Error for {bsns_year}: {type(e).__name__}')
         except json.JSONDecodeError as e:
             print(f'JSON Decode Error for {bsns_year}: {e}')
         except Exception as e:
-            print(f'An unexpected error occurred for {bsns_year}: {e}')
+            print(f'An unexpected error occurred for {bsns_year}: {type(e).__name__}')
 
     # 연도별로 정렬 (오름차순)
     fetched_data.sort(key=lambda x: x['year'])
@@ -75,7 +76,9 @@ if __name__ == '__main__':
 
 
     # 사용 예시: 실제 API 키와 삼성SDI 기업 코드를 사용하세요.
-    api_key = 'aaf2ed404abd73c00ab27a6ba80476131e6f9a73'  # 실제 API 키로 대체하세요.
+    api_key = os.environ.get("DART_API_KEY", "")
+    if not api_key:
+        raise SystemExit("DART_API_KEY 환경 변수를 설정하세요.")
     samsung_sdi_corp_code = '000660'
     annual_report_code = '11011'
 
@@ -98,10 +101,10 @@ if __name__ == '__main__':
             print("이제 이 ZIP 파일의 압축을 해제하여 내부의 XML 파일을 확인할 수 있습니다.")
         else:
             print(f"파일 다운로드에 실패했습니다. 상태 코드: {response.status_code}")
-            print(f"응답 내용: {response.text}")
+            print("응답 본문은 인증정보 보호를 위해 출력하지 않습니다.")
 
     except requests.exceptions.RequestException as e:
-        print(f"요청 중 오류가 발생했습니다: {e}")
+        print(f"요청 중 오류가 발생했습니다: {type(e).__name__}")
     except IOError as e:
         print(f"파일 저장 중 오류가 발생했습니다: {e}")
 

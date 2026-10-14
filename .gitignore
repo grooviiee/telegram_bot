@@ -12,3 +12,8 @@ simple_fast_api/.venv/
 !.env.example
 .venv/
 .pytest_cache/
+
+# 로컬 인증 파일
+*.pem
+*.key
+credentials.json

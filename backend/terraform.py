@@ -18,14 +18,10 @@ app.add_middleware(
     allow_headers=["*"],  # 모든 HTTP 헤더 허용
 )
 
-def get_api_key():
-    with open("config.yaml", 'r') as stream:
-        try:
-            config = yaml.safe_load(stream)
-            return config.get('api_key')
-        except yaml.YAMLError as exc:
-            print(exc)
-            return None
+def get_api_key() -> str:
+    """로컬 설정 파일 대신 환경 변수에서 DART 인증키를 읽습니다."""
+    return os.environ.get("DART_API_KEY", "")
+
 
 def download_corp_code_zip_internal(save_directory: str = "downloads"):
     """
@@ -33,7 +29,7 @@ def download_corp_code_zip_internal(save_directory: str = "downloads"):
     """
     api_key = get_api_key()
     if not api_key:
-        return None, "API 키를 config.yaml에서 찾을 수 없습니다."
+        return None, "DART_API_KEY 환경 변수가 설정되지 않았습니다."
     
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
     params = {"crtfc_key": api_key}
@@ -59,7 +55,7 @@ def download_corp_code_zip_internal(save_directory: str = "downloads"):
         return full_save_path, None
 
     except requests.exceptions.RequestException as e:
-        error_message = f"요청 중 오류가 발생했습니다: {e}"
+        error_message = f"요청 중 오류가 발생했습니다: {type(e).__name__}"
         print(error_message)
         return None, error_message
     except IOError as e:

@@ -8,14 +8,9 @@ import datetime # Add this import for timestamp
 app = Flask(__name__)
 CORS(app)
 
-def get_api_key():
-    with open("config.yaml", 'r') as stream:
-        try:
-            config = yaml.safe_load(stream)
-            return config.get('api_key')
-        except yaml.YAMLError as exc:
-            print(exc)
-            return None
+def get_api_key() -> str:
+    """로컬 설정 파일 대신 환경 변수에서 DART 인증키를 읽습니다."""
+    return os.environ.get("DART_API_KEY", "")
 
 # 이 함수는 OpenDART 기업개황정보 ZIP 파일을 다운로드하여 저장합니다.
 # Flask 애플리케이션 내에서 사용될 것입니다.
@@ -33,7 +28,7 @@ def download_corp_code_zip_internal(save_directory: str = "downloads"):
     """
     api_key = get_api_key()
     if not api_key:
-        return None, "API 키를 config.yaml에서 찾을 수 없습니다."
+        return None, "DART_API_KEY 환경 변수가 설정되지 않았습니다."
     # 요청 URL
     url = "https://opendart.fss.or.kr/api/corpCode.xml"
 
@@ -64,12 +59,12 @@ def download_corp_code_zip_internal(save_directory: str = "downloads"):
             print(f"ZIP 파일이 성공적으로 다운로드되어 '{full_save_path}'에 저장되었습니다.")
             return full_save_path, None
         else:
-            error_message = f"파일 다운로드에 실패했습니다. 상태 코드: {response.status_code}, 응답 내용: {response.text}"
+            error_message = f"파일 다운로드에 실패했습니다. 상태 코드: {response.status_code}"
             print(error_message)
             return None, error_message
 
     except requests.exceptions.RequestException as e:
-        error_message = f"요청 중 오류가 발생했습니다: {e}"
+        error_message = f"요청 중 오류가 발생했습니다: {type(e).__name__}"
         print(error_message)
         return None, error_message
     except IOError as e:
