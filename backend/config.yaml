@@ -1,1 +1,2 @@
-api_key: aaf2ed404abd73c00ab27a6ba80476131e6f9a73
+# 실제 인증키는 DART_API_KEY 환경 변수로 설정하세요.
+api_key: ""
