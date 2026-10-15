@@ -86,6 +86,10 @@ IMPORTANT_FILING_KEYWORDS = [
 
 # --- 연도 범위 ---
 YEAR_RANGE = 5  # 최근 N개년 재무 데이터 조회
+PROFIT_CHART_QUARTERS = 12
+PROFIT_LOOKBACK_YEARS = 4  # 전년 동기 성장률과 4분기 계산용 여유 기간
+PROFIT_FETCH_CONCURRENCY = 6
+PROFIT_CHART_FONT = os.getenv("PROFIT_CHART_FONT", "Malgun Gothic" if os.name == "nt" else "NanumGothic")
 
 # --- 분석 신뢰성 및 호출 정책 ---
 CACHE_SCHEMA_VERSION = 2

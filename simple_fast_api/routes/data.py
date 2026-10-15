@@ -17,6 +17,7 @@ from services.dart import (
     fetch_business_overview, download_reports_logic,
 )
 from services.company_data import annual_data, valuation_data, business_data
+from services.quarterly_profit import quarterly_profit_data
 
 router = APIRouter()
 
@@ -57,6 +58,15 @@ async def get_business_overview(company_name: str):
     await database.record_search(company_name)
     corp_code = await resolve_corp_code(company_name)
     result, cached = await business_data(company_name, corp_code)
+    return JSONResponse(content={**result, 'cached': cached})
+
+
+@router.get("/profit-quarterly/{company_name}")
+async def get_profit_quarterly(company_name: str) -> JSONResponse:
+    """최근 12분기의 단일 분기 실적과 전년 동기 매출 성장률을 반환합니다."""
+    await database.record_search(company_name)
+    corp_code = await resolve_corp_code(company_name)
+    result, cached = await quarterly_profit_data(company_name, corp_code)
     return JSONResponse(content={**result, 'cached': cached})
 
 

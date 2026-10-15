@@ -24,6 +24,7 @@ import database
 from config import TELEGRAM_BOT_TOKEN, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
 from services import github_trending
 from utils import fmt_krw
+from services.profit_chart import render_profit_chart
 
 # -------------------------------------------------------------------
 # 설정
@@ -343,11 +344,7 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await edit(fmt_dividend(data["company_name"], data["dividend_data"]))
 
     elif cmd == "profit":
-        data, status = await _get(f"/financials/{company}")
-        if status != 200:
-            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
-            return
-        await edit(fmt_profitability(data["company_name"], data["financials"]))
+        await _send_profit_chart(query.message, company)
 
     elif cmd == "health":
         data, status = await _get(f"/financials/{company}")
@@ -423,7 +420,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "📋 /analysis [회사명] — 종합 분석 요약\n"
         "🏢 /business [회사명] — 사업의 내용\n"
         "📊 /dividend [회사명] — 5개년 배당금\n"
-        "📈 /profit [회사명]   — 수익성 &amp; 성장성\n"
+        "📈 /profit [회사명]   — 최근 3년 분기별 수익성 그래프\n"
         "🏦 /health [회사명]   — 재무 건전성\n"
         "💹 /valuation [회사명] — 밸류에이션 지표\n\n"
         "<b>── AI 분석 ──</b>\n"
@@ -498,6 +495,7 @@ async def cmd_dividend(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_profitability(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """최근 12분기 수익성·성장성을 그래프로 전송합니다."""
     if not ctx.args:
         await update.message.reply_text("사용법: /profit [회사명]\n예: /profit 삼성전자")
         return
@@ -505,12 +503,38 @@ async def cmd_profitability(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     msg = await update.message.reply_text(
         f"⏳ <i>'{_e(company)}' 수익성 데이터 조회 중...</i>", parse_mode=ParseMode.HTML
     )
-    data, status = await _get(f"/financials/{company}")
-    if status != 200:
-        await _show_suggestions(msg, company, "profit")
-        return
-    text = fmt_profitability(data["company_name"], data["financials"], data.get("cached", False))
-    await msg.edit_text(text, parse_mode=ParseMode.HTML)
+    await _send_profit_chart(msg, company)
+
+
+async def _send_profit_chart(msg, company: str) -> None:
+    """직접 명령과 추천 기업 버튼에 동일한 그래프 응답을 제공합니다."""
+    try:
+        data, status = await _get(f"/profit-quarterly/{company}")
+        if status == 404:
+            await _show_suggestions(msg, company, "profit")
+            return
+        if status != 200:
+            await msg.edit_text(f"❌ {_e(data.get('detail', '분기 실적 조회 실패'))}", parse_mode=ParseMode.HTML)
+            return
+        rows = data['financials']
+        name = data['company_name']
+        image = await asyncio.to_thread(render_profit_chart, name, rows)
+        caption = (
+            f"📈 <b>{_e(name)} 최근 3년 분기별 수익성·성장성</b>\n"
+            f"{_e(rows[0]['label'])} ~ {_e(rows[-1]['label'])}\n"
+            "① 매출·영업이익 (억원) ② 영업이익률 (%)\n"
+            "③ 매출 성장률 (전년 동기 대비 %)\n"
+            "출처: DART · 4분기 = 연간 − 3분기 누적\n"
+            "빈 구간은 데이터 부족이며 0을 뜻하지 않습니다."
+        )
+        if len({r['fs_div'] for r in rows if r.get('fs_div')}) > 1:
+            caption += '\n⚠️ 연결·개별 기준 혼재: 기준이 다른 분기의 성장률은 표시하지 않습니다.'
+        with image:
+            await msg.reply_photo(photo=image, caption=caption, parse_mode=ParseMode.HTML)
+        await msg.delete()
+    except Exception as exc:
+        logging.getLogger(__name__).warning('분기 그래프 처리 실패 (%s)', type(exc).__name__)
+        await msg.edit_text('분기 그래프를 생성하거나 전송하지 못했습니다. 잠시 후 /profit 명령을 다시 입력해주세요.')
 
 
 async def cmd_financial_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
