@@ -9,7 +9,8 @@ import diskcache
 from collections.abc import Awaitable, Callable
 from weakref import WeakValueDictionary
 from config import (CACHE_SCHEMA_VERSION, DATA_CACHE_TTL_SECONDS,
-                    MARKET_CACHE_TTL_SECONDS, AI_CACHE_TTL_SECONDS, NEWS_CACHE_TTL_SECONDS)
+                    MARKET_CACHE_TTL_SECONDS, AI_CACHE_TTL_SECONDS, NEWS_CACHE_TTL_SECONDS,
+                    INSIDER_DOCUMENT_TTL, INSIDER_DOCUMENT_CACHE_BYTES)
 
 class DiskCache:
     def __init__(self, directory: str, max_size: int = 20, ttl: int = DATA_CACHE_TTL_SECONDS):
@@ -99,6 +100,30 @@ class DiskCache:
         return await asyncio.to_thread(self._info_sync)
 
 
+class DocumentCache(DiskCache):
+    """수천 개의 불변 원문 결과를 diskcache 내장 LRU로 관리합니다."""
+
+    def __init__(self, directory: str):
+        super().__init__(directory, ttl=INSIDER_DOCUMENT_TTL)
+        self._cache.reset('eviction_policy', 'least-recently-used')
+        self._cache.reset('size_limit', INSIDER_DOCUMENT_CACHE_BYTES)
+
+    def _get_sync(self, key: str):
+        value = self._cache.get(key)
+        if isinstance(value, dict) and value.get('schema') == CACHE_SCHEMA_VERSION:
+            return value.get('payload')
+        return None
+
+    def _set_sync(self, key: str, value) -> None:
+        self._cache.set(key, {'schema': CACHE_SCHEMA_VERSION, 'payload': value}, expire=self.ttl)
+
+    def _clear_sync(self, key: str = None):
+        return self._cache.delete(key) if key else self._cache.clear()
+
+    def _info_sync(self) -> dict:
+        return {'size': len(self._cache), 'max_bytes': INSIDER_DOCUMENT_CACHE_BYTES}
+
+
 _CACHE_DIR = os.path.join(os.path.dirname(__file__), ".cache")
 dividend_cache      = DiskCache(os.path.join(_CACHE_DIR, "dividend"),      max_size=20)
 financials_cache    = DiskCache(os.path.join(_CACHE_DIR, "financials"),    max_size=20)
@@ -114,6 +139,8 @@ events_cache               = DiskCache(os.path.join(_CACHE_DIR, "events"), max_s
 
 filings_cache = DiskCache(os.path.join(_CACHE_DIR, "filings"), ttl=NEWS_CACHE_TTL_SECONDS)
 insider_cache = DiskCache(os.path.join(_CACHE_DIR, "insider"))
+insider_trend_cache = DiskCache(os.path.join(_CACHE_DIR, "insider_trend"))
+insider_document_cache = DocumentCache(os.path.join(_CACHE_DIR, "insider_documents"))
 insider_ai_cache = DiskCache(os.path.join(_CACHE_DIR, "insider_ai"), ttl=AI_CACHE_TTL_SECONDS)
 
 score_cache = DiskCache(os.path.join(_CACHE_DIR, "score"), ttl=MARKET_CACHE_TTL_SECONDS)

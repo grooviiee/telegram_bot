@@ -59,7 +59,7 @@ TELEGRAM_COMMANDS = (
     ('score', '정량 투자 점수 · 예: /score 삼성전자'),
     ('report', 'AI 종합 리포트 · 예: /report 삼성전자'),
     ('buffett', '버핏 스타일 리포트 · 예: /buffett 삼성전자'),
-    ('insider', '내부자 거래 현황 · 예: /insider 삼성전자'),
+    ('insider', '최근 3개년 내부자 매수·매도 그래프 · 예: /insider 삼성전자'),
     ('chat', 'AI 상담 시작 · 예: /chat 삼성전자'),
     ('end', 'AI 상담 종료'),
     ('fav_add', '즐겨찾기 추가 · 예: /fav_add 삼성전자 dividend'),
@@ -112,6 +112,24 @@ PROFIT_CHART_QUARTERS = 12
 PROFIT_LOOKBACK_YEARS = 4  # 전년 동기 성장률과 4분기 계산용 여유 기간
 PROFIT_FETCH_CONCURRENCY = 6
 PROFIT_CHART_FONT = os.getenv("PROFIT_CHART_FONT", "Malgun Gothic" if os.name == "nt" else "NanumGothic")
+INSIDER_TREND_YEARS = 3
+INSIDER_FETCH_CONCURRENCY = 8
+INSIDER_REQUESTS_PER_SECOND = 5
+INSIDER_FAILURE_THRESHOLD = 8
+INSIDER_PARTIAL_RETRY_SECONDS = 5 * 60
+INSIDER_REQUEST_TIMEOUT = 900
+INSIDER_DOCUMENT_TTL = 30 * 24 * 60 * 60
+INSIDER_DOCUMENT_CACHE_BYTES = 50 * 1024 * 1024
+INSIDER_FILING_TYPE = 'D002'
+INSIDER_PARSER_VERSION = 2
+INSIDER_NON_TRADE_REASONS = ('주식매수선택권', '매수청구권', '증여', '상속', '보상',
+                             '유상증자', '무상증자', '주식분할', '주식병합', '신규보고')
+INSIDER_TRADE_REASONS = {
+    '장내매수': 'buy', '장외매수': 'buy', '시간외매수': 'buy',
+    '시간외대량매수': 'buy', '공개매수': 'buy',
+    '장내매도': 'sell', '장외매도': 'sell', '시간외매도': 'sell',
+    '시간외대량매도': 'sell', '공개매도': 'sell',
+}
 
 # --- 분석 신뢰성 및 호출 정책 ---
 CACHE_SCHEMA_VERSION = 2

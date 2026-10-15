@@ -18,6 +18,7 @@ from services.dart import (
 )
 from services.company_data import annual_data, valuation_data, business_data
 from services.quarterly_profit import quarterly_profit_data
+from services.insider_trend import insider_trend_data
 
 router = APIRouter()
 
@@ -67,6 +68,15 @@ async def get_profit_quarterly(company_name: str) -> JSONResponse:
     await database.record_search(company_name)
     corp_code = await resolve_corp_code(company_name)
     result, cached = await quarterly_profit_data(company_name, corp_code)
+    return JSONResponse(content={**result, 'cached': cached})
+
+
+@router.get("/insider-trend/{company_name}")
+async def get_insider_trend(company_name: str) -> JSONResponse:
+    """최근 3개년 공시 원문에서 확인한 주식 매수·매도 수량을 반환합니다."""
+    await database.record_search(company_name)
+    corp_code = await resolve_corp_code(company_name)
+    result, cached = await insider_trend_data(company_name, corp_code)
     return JSONResponse(content={**result, 'cached': cached})
 
 

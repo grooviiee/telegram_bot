@@ -21,10 +21,12 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden
 
 import database
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
+from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
+                    TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT)
 from services import github_trending
 from utils import fmt_krw
 from services.profit_chart import render_profit_chart
+from services.insider_chart import render_insider_chart
 
 # -------------------------------------------------------------------
 # 설정
@@ -67,10 +69,11 @@ ANALYSIS_LABEL = {
 # 내부 HTTP 헬퍼
 # -------------------------------------------------------------------
 
-async def _get(path: str) -> tuple[dict, int]:
+async def _get(path: str, timeout: int | None = None) -> tuple[dict, int]:
     """로컬 FastAPI 서버에 GET 요청."""
     session = get_session()
-    async with session.get(f"{API_BASE}{path}") as resp:
+    request_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else session.timeout
+    async with session.get(f"{API_BASE}{path}", timeout=request_timeout) as resp:
         return await resp.json(), resp.status
 
 
@@ -393,18 +396,19 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 lines.append(f"  {icon} {s['text']}")
         await edit("\n".join(lines))
 
-    elif cmd in ("report", "buffett", "insider"):
-        endpoint = {"report": "report", "buffett": "buffett-report", "insider": "insider"}[cmd]
+    elif cmd == "insider":
+        ctx.application.create_task(_send_insider_chart(query.message, company), update=update)
+
+    elif cmd in ("report", "buffett"):
+        endpoint = {"report": "report", "buffett": "buffett-report"}[cmd]
         data, status = await _get(f"/{endpoint}/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
         if cmd == "report":
             text = f"🤖 <b>{_e(data['company_name'])} AI 종합 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
-        elif cmd == "buffett":
-            text = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
         else:
-            text = data.get("message_text", "") + "\n<b>── AI 분석 ──</b>\n" + _md_to_html(data.get("ai_analysis", ""))
+            text = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
         await send_long(text)
 
 
@@ -427,7 +431,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "🤖 /report [회사명]  — AI 종합 투자 리포트\n"
         "🧙 /buffett [회사명] — 워렌 버핏 스타일 리포트\n"
         "📊 /score [회사명]   — 정량 투자 스코어 (0~100)\n"
-        "🕵️ /insider [회사명] — 내부자 거래 현황 + AI 분석\n"
+        "🕵️ /insider [회사명] — 최근 3개년 매수·매도 그래프\n"
         "💬 /chat [회사명]    — AI 상담 시작\n"
         "          /end       — 상담 종료\n\n"
         "<b>── GitHub 핫 프로젝트 ──</b>\n"
@@ -660,25 +664,50 @@ async def cmd_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # -------------------------------------------------------------------
 
 async def cmd_insider(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """임원/주요주주 내부자 거래 현황 조회. /insider [회사명]"""
+    """최근 3개년 내부자 매수·매도 추이를 그래프로 제공합니다."""
     if not ctx.args:
         await update.message.reply_text("사용법: /insider [회사명]\n예: /insider 삼성전자")
         return
     company = " ".join(ctx.args)
     msg = await update.message.reply_text(
-        f"⏳ <i>'{_e(company)}' 내부자 거래 분석 중...</i>",
+        f"⏳ <i>'{_e(company)}' 최근 3개년 내부자 공시 원문을 확인 중입니다. 최초 조회는 수 분 걸릴 수 있습니다.</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/insider/{company}")
-    if status != 200:
-        await _show_suggestions(msg, company, "insider")
-        return
+    ctx.application.create_task(_send_insider_chart(msg, company), update=update)
 
-    message_text = data.get("message_text", "")
-    ai_analysis = _md_to_html(data.get("ai_analysis", ""))
 
-    await msg.delete()
-    await _send_long(update, message_text + ("\n<b>── AI 분석 ──</b>\n" + ai_analysis if ai_analysis else ""))
+async def _send_insider_chart(msg, company: str) -> None:
+    """원문에서 확인한 매매 수량 그래프와 연간 합계를 전송합니다."""
+    try:
+        data, status = await _get(f"/insider-trend/{company}", timeout=INSIDER_REQUEST_TIMEOUT)
+        if status == 404:
+            await _show_suggestions(msg, company, 'insider')
+            return
+        if status != 200:
+            await msg.edit_text(f"❌ {_e(data.get('detail', '내부자 공시 조회 실패'))}", parse_mode=ParseMode.HTML)
+            return
+        caption = [f"🕵️ <b>{_e(data['company_name'])} 내부자 주식 매수·매도</b>",
+                   f"{data['start_date']} ~ {data['end_date']} · 거래일 기준"]
+        for row in data['annual']:
+            buy = f"{row['buy']:,}주" if row['buy'] is not None else '미확인'
+            sell = f"{row['sell']:,}주" if row['sell'] is not None else '미확인'
+            caption.append(f"{row['year']}년{' (진행 중)' if row['partial_year'] else ''}: 매수 {buy} / 매도 {sell}")
+        caption.extend([
+            f"출처: DART 최종 공시 {data['filings_parsed']:,}/{data['filings_total']:,}건 확인",
+            '주식 매수·매도 사유가 명시된 건만 합산 · 증여·상속·보상 등 제외',
+        ])
+        if not data['coverage_complete']:
+            caption.append(f"⚠️ 원문 {data['filings_failed']}건·행 {data['invalid_rows']}건 미확인. 수량은 확인분만의 하한입니다.")
+        if data.get('refresh_failed'):
+            caption.append('⚠️ DART 연결 실패로 마지막 수집 시점의 결과를 표시합니다.')
+        caption.append(f"<a href=\"{_e(data['recent_sources'][-1]['url'])}\">최근 공시 원문</a>")
+        image = await asyncio.to_thread(render_insider_chart, data)
+        with image:
+            await msg.reply_photo(photo=image, caption='\n'.join(caption), parse_mode=ParseMode.HTML)
+        await msg.delete()
+    except Exception as exc:
+        logging.getLogger(__name__).warning('내부자 그래프 처리 실패 (%s)', type(exc).__name__)
+        await msg.edit_text('내부자 그래프를 가져오지 못했습니다. 공시가 많은 기업은 최초 수집에 시간이 걸립니다. 잠시 후 /insider 명령을 다시 입력해주세요.')
 
 
 # -------------------------------------------------------------------

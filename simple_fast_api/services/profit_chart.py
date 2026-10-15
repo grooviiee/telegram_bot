@@ -9,13 +9,13 @@ from matplotlib.ticker import FuncFormatter
 
 from config import PROFIT_CHART_FONT
 
-_render_lock = Lock()
+CHART_RENDER_LOCK = Lock()
 
 
 def render_profit_chart(company: str, rows: list[dict]) -> BytesIO:
     """매출·영업이익, 이익률, 전년 동기 성장률 그래프를 PNG로 반환합니다."""
     # matplotlib의 전역 폰트 설정과 동시 렌더링을 같은 잠금으로 보호합니다.
-    with _render_lock, matplotlib.rc_context({'font.family': PROFIT_CHART_FONT, 'axes.unicode_minus': False}):
+    with CHART_RENDER_LOCK, matplotlib.rc_context({'font.family': PROFIT_CHART_FONT, 'axes.unicode_minus': False}):
         fig = Figure(figsize=(12, 10), dpi=140, facecolor='#f5f7fb')
         FigureCanvasAgg(fig)
         axes = fig.subplots(3, 1, sharex=True, gridspec_kw={'height_ratios': [1.4, 1, 1]})
