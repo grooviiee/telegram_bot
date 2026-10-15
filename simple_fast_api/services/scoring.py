@@ -14,7 +14,9 @@ def _cagr(start: int | float | None, end: int | float | None, years: int) -> flo
     if start is None or end is None or years <= 0 or start <= 0 or end < 0:
         return None
     try:
-        return (end / start) ** (1 / years) - 1
+        result = (end / start) ** (1 / years) - 1
+        # 음수 end값에서 복소수가 나올 수 있으므로 실수만 허용
+        return None if isinstance(result, complex) else result
     except (ZeroDivisionError, ValueError):
         return None
 
