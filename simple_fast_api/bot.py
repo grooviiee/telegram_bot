@@ -12,7 +12,7 @@ import asyncio
 import html
 import logging
 import aiohttp
-from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, Bot, BotCommand, MenuButtonCommands, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters, CallbackQueryHandler,
@@ -21,7 +21,7 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden
 
 import database
-from config import TELEGRAM_BOT_TOKEN, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
 from services import github_trending
 from utils import fmt_krw
 from services.profit_chart import render_profit_chart
@@ -994,6 +994,14 @@ async def send_trending_notifications(bot: Bot) -> None:
             logging.getLogger(__name__).warning("GitHub 정기 발송 실패 (%s)", type(exc).__name__)
 
 
+async def register_bot_commands(bot: Bot) -> None:
+    """슬래시 자동완성 설명과 명령어 메뉴 버튼을 텔레그램에 등록합니다."""
+    commands = [BotCommand(command, description) for command, description in TELEGRAM_COMMANDS]
+    for language in (None, 'ko', 'en'):
+        await bot.set_my_commands(commands, language_code=language)
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
 def create_bot_application() -> Application:
     token = TELEGRAM_BOT_TOKEN
     if not token:
@@ -1023,6 +1031,7 @@ def create_bot_application() -> Application:
 
     # 기업 분석
     app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("help",      cmd_start))
     app.add_handler(CommandHandler("analysis",  cmd_analysis))
     app.add_handler(CommandHandler("business",  cmd_business))
     app.add_handler(CommandHandler("dividend",  cmd_dividend))
@@ -1045,7 +1054,7 @@ def create_bot_application() -> Application:
     app.add_handler(CallbackQueryHandler(handle_suggest_callback))
 
     # help 텍스트 입력 시 도움말
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^help$"), cmd_start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^(help|/)$"), cmd_start))
 
     # 이스터에그
     async def _easter_egg(u, c):

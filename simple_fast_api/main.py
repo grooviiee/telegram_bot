@@ -42,6 +42,10 @@ async def lifespan(app: FastAPI):
     if bot_app:
         await bot_app.initialize()
         try:
+            await telegram_bot.register_bot_commands(bot_app.bot)
+        except Exception as exc:
+            print(f"[Bot] 명령어 메뉴 등록 실패 ({type(exc).__name__})")
+        try:
             await bot_app.bot.delete_webhook(drop_pending_updates=True)
         except Exception:
             pass

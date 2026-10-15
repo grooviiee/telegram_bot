@@ -47,6 +47,28 @@ ANNUAL_REPRT_CODE = "11011"
 
 # --- 텔레그램 상수 ---
 TELEGRAM_MSG_LIMIT = 4000  # 안전 마진 포함한 최대 메시지 길이
+TELEGRAM_COMMANDS = (
+    ('start', '전체 사용법 및 명령어 안내'),
+    ('help', '도움말 보기'),
+    ('analysis', '기업 재무 요약 · 예: /analysis 삼성전자'),
+    ('business', '사업 내용 · 예: /business 삼성전자'),
+    ('dividend', '5개년 배당금 · 예: /dividend 삼성전자'),
+    ('profit', '최근 3년 분기별 수익성 그래프 · 예: /profit 삼성전자'),
+    ('health', '재무 건전성 · 예: /health 삼성전자'),
+    ('valuation', '밸류에이션 지표 · 예: /valuation 삼성전자'),
+    ('score', '정량 투자 점수 · 예: /score 삼성전자'),
+    ('report', 'AI 종합 리포트 · 예: /report 삼성전자'),
+    ('buffett', '버핏 스타일 리포트 · 예: /buffett 삼성전자'),
+    ('insider', '내부자 거래 현황 · 예: /insider 삼성전자'),
+    ('chat', 'AI 상담 시작 · 예: /chat 삼성전자'),
+    ('end', 'AI 상담 종료'),
+    ('fav_add', '즐겨찾기 추가 · 예: /fav_add 삼성전자 dividend'),
+    ('fav_del', '즐겨찾기 삭제 · 예: /fav_del 삼성전자 dividend'),
+    ('favs', '내 즐겨찾기 목록'),
+    ('today', '오늘의 GitHub 인기 프로젝트'),
+    ('trend_on', '매일 오전 9시 GitHub 소개 신청'),
+    ('trend_off', 'GitHub 정기 소개 해제'),
+)
 
 # --- 파일 경로 ---
 BASE_DIR = os.path.dirname(__file__)
