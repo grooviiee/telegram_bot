@@ -2,19 +2,23 @@
 from collections.abc import Awaitable, Callable
 from fastapi import HTTPException
 from cache import DiskCache
-from config import GEMINI_API_KEY, GEMINI_MODEL, GEMINI_REPORT_CONFIG
+from config import (GEMINI_API_KEY, GEMINI_MODEL, GEMINI_REPORT_CONFIG, AI_PROVIDER,
+                    OLLAMA_MODEL, OLLAMA_PROMPT_VERSION, OLLAMA_NUM_CTX, OLLAMA_MAX_OUTPUT_TOKENS)
 from services.company_data import input_fingerprint
 
 
 async def cached_inference(cache: DiskCache, company: str, inputs: dict,
                            generate: Callable[[], Awaitable[str]]) -> tuple[str, bool]:
     """입력이 동일하면 AI 결과를 재사용하며 실패 응답은 저장하지 않습니다."""
-    fingerprint = input_fingerprint({'inputs': inputs, 'model': GEMINI_MODEL, 'generation': GEMINI_REPORT_CONFIG})
+    fingerprint = input_fingerprint({'inputs': inputs, 'provider': AI_PROVIDER,
+        'model': OLLAMA_MODEL if AI_PROVIDER == 'ollama' else GEMINI_MODEL,
+        'generation': GEMINI_REPORT_CONFIG, 'local_prompt_version': OLLAMA_PROMPT_VERSION,
+        'local_context': OLLAMA_NUM_CTX, 'local_output': OLLAMA_MAX_OUTPUT_TOKENS})
     async with cache.lock(company):
         cached = await cache.get(company)
         if cached and cached.get('input_fingerprint') == fingerprint:
             return cached['text'], True
-        if not GEMINI_API_KEY:
+        if AI_PROVIDER != 'ollama' and not GEMINI_API_KEY:
             raise HTTPException(503, 'AI 분석 키가 설정되지 않았습니다. 정량 조회는 사용할 수 있습니다.')
         text = await generate()
         if not text or text.startswith('(AI 응답 생성 실패)'):

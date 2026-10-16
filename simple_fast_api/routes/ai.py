@@ -1,7 +1,8 @@
 """AI 분석 라우트 (리포트, 챗봇, 내부자 거래)."""
 import asyncio
 import json
-from config import GEMINI_API_KEY, DART_ELESTOCK_URL
+from config import (GEMINI_API_KEY, DART_ELESTOCK_URL, AI_PROVIDER, GEMINI_MODEL,
+                    OLLAMA_MODEL, AI_MAX_QUESTION_CHARS, AI_EVIDENCE_RULES, OLLAMA_MAX_OUTPUT_TOKENS)
 from cache import insider_cache, insider_ai_cache
 from services.company_data import gather_company_data, provenance
 from services.ai_policy import cached_inference
@@ -10,7 +11,9 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from utils import call_gemini
+from services.local_ai import ollama_status
 
 import database
 from cache import (
@@ -26,6 +29,34 @@ from services.scoring import cached_investment_score
 from services.events import analyze_price_events
 
 router = APIRouter()
+
+
+class AskRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=AI_MAX_QUESTION_CHARS)
+
+
+@router.get('/ai/status')
+async def ai_status() -> dict:
+    """비밀키 없이 현재 AI 제공자와 로컬 모델 상태를 표시합니다."""
+    if AI_PROVIDER == 'ollama':
+        return await ollama_status()
+    return {'provider': AI_PROVIDER, 'model': GEMINI_MODEL, 'available': bool(GEMINI_API_KEY)}
+
+
+@router.post('/ask')
+async def ask(req: AskRequest) -> dict:
+    """공시 조회 없이 일반 질문을 현재 AI 제공자에 전달합니다."""
+    if not req.message.strip():
+        raise HTTPException(422, '질문을 입력해주세요.')
+    if AI_PROVIDER != 'ollama' and not GEMINI_API_KEY:
+        raise HTTPException(503, 'AI가 설정되지 않았습니다.')
+    answer = await call_gemini(req.message, system_instruction=AI_EVIDENCE_RULES +
+        '\n일반 개념 설명을 제공합니다. 기업의 실적·최신 뉴스·공시를 조회했다고 주장하지 마세요.',
+        generation_config={'temperature': .2, 'maxOutputTokens': OLLAMA_MAX_OUTPUT_TOKENS})
+    if not answer or answer.startswith('(AI 응답 생성 실패)'):
+        raise HTTPException(502, 'AI 응답을 생성하지 못했습니다. /ai로 상태를 확인해주세요.')
+    return {'answer': answer, 'provider': AI_PROVIDER,
+            'model': OLLAMA_MODEL if AI_PROVIDER == 'ollama' else GEMINI_MODEL, 'ai_used': True}
 
 
 async def _report_response(company_name: str, buffett: bool) -> JSONResponse:
@@ -65,8 +96,8 @@ async def get_buffett_report(company_name: str) -> JSONResponse:
 
 
 class ChatRequest(BaseModel):
-    message: str
-    history: list[dict] = []
+    message: str = Field(min_length=1, max_length=AI_MAX_QUESTION_CHARS)
+    history: list[dict] = Field(default_factory=list, max_length=30)
     mode: str = "general"
 
 
@@ -78,7 +109,7 @@ async def chat(company_name: str, req: ChatRequest):
     factual = await answer_factual(company_name, corp_code, req.message)
     if factual is not None:
         return JSONResponse(content={"answer": factual, "mode": req.mode, "ai_used": False})
-    if not GEMINI_API_KEY:
+    if AI_PROVIDER != 'ollama' and not GEMINI_API_KEY:
         raise HTTPException(503, 'AI 분석 키가 설정되지 않았습니다.')
     data = await gather_company_data(corp_code, company_name)
     business_sections = data['business_sections']
@@ -90,10 +121,14 @@ async def chat(company_name: str, req: ChatRequest):
     buffett_mode = req.mode == "buffett"
     system_context = build_system_context(
         company_name, business_sections, financials, dividends, valuation, filings,
-        buffett_mode=buffett_mode,
+        buffett_mode=buffett_mode, question=req.message,
     )
 
-    system_context += "\n" + json.dumps(data["data_quality"], ensure_ascii=False)
+    quality = data['data_quality']
+    context_quality = ({'warnings': quality['warnings'],
+                        'financials_source': quality['sources'].get('financials')}
+                       if AI_PROVIDER == 'ollama' else quality)
+    system_context += "\n" + json.dumps(context_quality, ensure_ascii=False)
 
     # Function Calling 도구 실행기 생성
     tool_executor = create_tool_executor(corp_code, company_name, financials, valuation)

@@ -12,7 +12,7 @@ import asyncio
 import html
 import logging
 import aiohttp
-from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, Bot, BotCommand, MenuButtonCommands, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     ConversationHandler, ContextTypes, filters, CallbackQueryHandler,
@@ -21,9 +21,13 @@ from telegram.constants import ParseMode
 from telegram.error import Forbidden
 
 import database
-from config import TELEGRAM_BOT_TOKEN, TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE
+from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
+                    TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT,
+                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS)
 from services import github_trending
 from utils import fmt_krw
+from services.profit_chart import render_profit_chart
+from services.insider_chart import render_insider_chart
 
 # -------------------------------------------------------------------
 # 설정
@@ -66,17 +70,19 @@ ANALYSIS_LABEL = {
 # 내부 HTTP 헬퍼
 # -------------------------------------------------------------------
 
-async def _get(path: str) -> tuple[dict, int]:
+async def _get(path: str, timeout: int | None = None) -> tuple[dict, int]:
     """로컬 FastAPI 서버에 GET 요청."""
     session = get_session()
-    async with session.get(f"{API_BASE}{path}") as resp:
+    request_timeout = aiohttp.ClientTimeout(total=timeout) if timeout is not None else session.timeout
+    async with session.get(f"{API_BASE}{path}", timeout=request_timeout) as resp:
         return await resp.json(), resp.status
 
 
 async def _post(path: str, payload: dict) -> tuple[dict, int]:
     """로컬 FastAPI 서버에 POST 요청."""
     session = get_session()
-    async with session.post(f"{API_BASE}{path}", json=payload) as resp:
+    async with session.post(f"{API_BASE}{path}", json=payload,
+                            timeout=aiohttp.ClientTimeout(total=AI_HTTP_TIMEOUT)) as resp:
         return await resp.json(), resp.status
 
 
@@ -343,11 +349,7 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
         await edit(fmt_dividend(data["company_name"], data["dividend_data"]))
 
     elif cmd == "profit":
-        data, status = await _get(f"/financials/{company}")
-        if status != 200:
-            await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
-            return
-        await edit(fmt_profitability(data["company_name"], data["financials"]))
+        await _send_profit_chart(query.message, company)
 
     elif cmd == "health":
         data, status = await _get(f"/financials/{company}")
@@ -396,18 +398,19 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
                 lines.append(f"  {icon} {s['text']}")
         await edit("\n".join(lines))
 
-    elif cmd in ("report", "buffett", "insider"):
-        endpoint = {"report": "report", "buffett": "buffett-report", "insider": "insider"}[cmd]
+    elif cmd == "insider":
+        ctx.application.create_task(_send_insider_chart(query.message, company), update=update)
+
+    elif cmd in ("report", "buffett"):
+        endpoint = {"report": "report", "buffett": "buffett-report"}[cmd]
         data, status = await _get(f"/{endpoint}/{company}")
         if status != 200:
             await edit(f"❌ {_e(data.get('detail', '조회 실패'))}")
             return
         if cmd == "report":
             text = f"🤖 <b>{_e(data['company_name'])} AI 종합 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
-        elif cmd == "buffett":
-            text = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
         else:
-            text = data.get("message_text", "") + "\n<b>── AI 분석 ──</b>\n" + _md_to_html(data.get("ai_analysis", ""))
+            text = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n" + _md_to_html(data.get("report", ""))
         await send_long(text)
 
 
@@ -423,14 +426,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "📋 /analysis [회사명] — 종합 분석 요약\n"
         "🏢 /business [회사명] — 사업의 내용\n"
         "📊 /dividend [회사명] — 5개년 배당금\n"
-        "📈 /profit [회사명]   — 수익성 &amp; 성장성\n"
+        "📈 /profit [회사명]   — 최근 3년 분기별 수익성 그래프\n"
         "🏦 /health [회사명]   — 재무 건전성\n"
         "💹 /valuation [회사명] — 밸류에이션 지표\n\n"
         "<b>── AI 분석 ──</b>\n"
+        "🤖 /ask [질문] — 일반 AI 질문\n"
+        "🖥 /ai — 모델·GPU 상태\n"
         "🤖 /report [회사명]  — AI 종합 투자 리포트\n"
         "🧙 /buffett [회사명] — 워렌 버핏 스타일 리포트\n"
         "📊 /score [회사명]   — 정량 투자 스코어 (0~100)\n"
-        "🕵️ /insider [회사명] — 내부자 거래 현황 + AI 분석\n"
+        "🕵️ /insider [회사명] — 최근 3개년 매수·매도 그래프\n"
         "💬 /chat [회사명]    — AI 상담 시작\n"
         "          /end       — 상담 종료\n\n"
         "<b>── GitHub 핫 프로젝트 ──</b>\n"
@@ -498,6 +503,7 @@ async def cmd_dividend(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_profitability(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """최근 12분기 수익성·성장성을 그래프로 전송합니다."""
     if not ctx.args:
         await update.message.reply_text("사용법: /profit [회사명]\n예: /profit 삼성전자")
         return
@@ -505,12 +511,38 @@ async def cmd_profitability(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     msg = await update.message.reply_text(
         f"⏳ <i>'{_e(company)}' 수익성 데이터 조회 중...</i>", parse_mode=ParseMode.HTML
     )
-    data, status = await _get(f"/financials/{company}")
-    if status != 200:
-        await _show_suggestions(msg, company, "profit")
-        return
-    text = fmt_profitability(data["company_name"], data["financials"], data.get("cached", False))
-    await msg.edit_text(text, parse_mode=ParseMode.HTML)
+    await _send_profit_chart(msg, company)
+
+
+async def _send_profit_chart(msg, company: str) -> None:
+    """직접 명령과 추천 기업 버튼에 동일한 그래프 응답을 제공합니다."""
+    try:
+        data, status = await _get(f"/profit-quarterly/{company}")
+        if status == 404:
+            await _show_suggestions(msg, company, "profit")
+            return
+        if status != 200:
+            await msg.edit_text(f"❌ {_e(data.get('detail', '분기 실적 조회 실패'))}", parse_mode=ParseMode.HTML)
+            return
+        rows = data['financials']
+        name = data['company_name']
+        image = await asyncio.to_thread(render_profit_chart, name, rows)
+        caption = (
+            f"📈 <b>{_e(name)} 최근 3년 분기별 수익성·성장성</b>\n"
+            f"{_e(rows[0]['label'])} ~ {_e(rows[-1]['label'])}\n"
+            "① 매출·영업이익 (억원) ② 영업이익률 (%)\n"
+            "③ 매출 성장률 (전년 동기 대비 %)\n"
+            "출처: DART · 4분기 = 연간 − 3분기 누적\n"
+            "빈 구간은 데이터 부족이며 0을 뜻하지 않습니다."
+        )
+        if len({r['fs_div'] for r in rows if r.get('fs_div')}) > 1:
+            caption += '\n⚠️ 연결·개별 기준 혼재: 기준이 다른 분기의 성장률은 표시하지 않습니다.'
+        with image:
+            await msg.reply_photo(photo=image, caption=caption, parse_mode=ParseMode.HTML)
+        await msg.delete()
+    except Exception as exc:
+        logging.getLogger(__name__).warning('분기 그래프 처리 실패 (%s)', type(exc).__name__)
+        await msg.edit_text('분기 그래프를 생성하거나 전송하지 못했습니다. 잠시 후 /profit 명령을 다시 입력해주세요.')
 
 
 async def cmd_financial_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -554,7 +586,7 @@ async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"⏳ <i>'{_e(company)}' AI 리포트 생성 중... (최대 60초 소요)</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/report/{company}")
+    data, status = await _get(f"/report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
         await _show_suggestions(msg, company, "report")
         return
@@ -573,7 +605,7 @@ async def cmd_buffett_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         f"⏳ <i>'{_e(company)}' 버핏 리포트 생성 중... (최대 60초 소요)</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/buffett-report/{company}")
+    data, status = await _get(f"/buffett-report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
         await _show_suggestions(msg, company, "buffett")
         return
@@ -636,30 +668,99 @@ async def cmd_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # -------------------------------------------------------------------
 
 async def cmd_insider(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """임원/주요주주 내부자 거래 현황 조회. /insider [회사명]"""
+    """최근 3개년 내부자 매수·매도 추이를 그래프로 제공합니다."""
     if not ctx.args:
         await update.message.reply_text("사용법: /insider [회사명]\n예: /insider 삼성전자")
         return
     company = " ".join(ctx.args)
     msg = await update.message.reply_text(
-        f"⏳ <i>'{_e(company)}' 내부자 거래 분석 중...</i>",
+        f"⏳ <i>'{_e(company)}' 최근 3개년 내부자 공시 원문을 확인 중입니다. 최초 조회는 수 분 걸릴 수 있습니다.</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/insider/{company}")
-    if status != 200:
-        await _show_suggestions(msg, company, "insider")
-        return
+    ctx.application.create_task(_send_insider_chart(msg, company), update=update)
 
-    message_text = data.get("message_text", "")
-    ai_analysis = _md_to_html(data.get("ai_analysis", ""))
 
-    await msg.delete()
-    await _send_long(update, message_text + ("\n<b>── AI 분석 ──</b>\n" + ai_analysis if ai_analysis else ""))
+async def _send_insider_chart(msg, company: str) -> None:
+    """원문에서 확인한 매매 수량 그래프와 연간 합계를 전송합니다."""
+    try:
+        data, status = await _get(f"/insider-trend/{company}", timeout=INSIDER_REQUEST_TIMEOUT)
+        if status == 404:
+            await _show_suggestions(msg, company, 'insider')
+            return
+        if status != 200:
+            await msg.edit_text(f"❌ {_e(data.get('detail', '내부자 공시 조회 실패'))}", parse_mode=ParseMode.HTML)
+            return
+        caption = [f"🕵️ <b>{_e(data['company_name'])} 내부자 주식 매수·매도</b>",
+                   f"{data['start_date']} ~ {data['end_date']} · 거래일 기준"]
+        for row in data['annual']:
+            buy = f"{row['buy']:,}주" if row['buy'] is not None else '미확인'
+            sell = f"{row['sell']:,}주" if row['sell'] is not None else '미확인'
+            caption.append(f"{row['year']}년{' (진행 중)' if row['partial_year'] else ''}: 매수 {buy} / 매도 {sell}")
+        caption.extend([
+            f"출처: DART 최종 공시 {data['filings_parsed']:,}/{data['filings_total']:,}건 확인",
+            '주식 매수·매도 사유가 명시된 건만 합산 · 증여·상속·보상 등 제외',
+        ])
+        if not data['coverage_complete']:
+            caption.append(f"⚠️ 원문 {data['filings_failed']}건·행 {data['invalid_rows']}건 미확인. 수량은 확인분만의 하한입니다.")
+        if data.get('refresh_failed'):
+            caption.append('⚠️ DART 연결 실패로 마지막 수집 시점의 결과를 표시합니다.')
+        caption.append(f"<a href=\"{_e(data['recent_sources'][-1]['url'])}\">최근 공시 원문</a>")
+        image = await asyncio.to_thread(render_insider_chart, data)
+        with image:
+            await msg.reply_photo(photo=image, caption='\n'.join(caption), parse_mode=ParseMode.HTML)
+        await msg.delete()
+    except Exception as exc:
+        logging.getLogger(__name__).warning('내부자 그래프 처리 실패 (%s)', type(exc).__name__)
+        await msg.edit_text('내부자 그래프를 가져오지 못했습니다. 공시가 많은 기업은 최초 수집에 시간이 걸립니다. 잠시 후 /insider 명령을 다시 입력해주세요.')
 
 
 # -------------------------------------------------------------------
 # AI 상담 (ConversationHandler)
 # -------------------------------------------------------------------
+
+async def cmd_ai(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """현재 AI 모델과 GPU 적재 상태를 표시합니다."""
+    try:
+        data, status = await _get('/ai/status')
+        if status != 200:
+            raise RuntimeError('status')
+        state = '연결됨' if data.get('available') else '연결되지 않음'
+        gpu = data.get('gpu_bytes', 0)
+        detail = f'GPU 메모리: {gpu / 1024 ** 3:.2f} GiB' if gpu else 'GPU: 현재 적재된 모델 없음'
+        await update.message.reply_text(
+            f"AI: {_e(data.get('provider'))}\n모델: {_e(data.get('model'))}\n상태: {state}\n{detail}",
+            parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text('AI 상태를 확인하지 못했습니다. 서버 연결을 확인해주세요.')
+
+
+async def cmd_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """기업 조회 없이 일반 질문을 AI에 전달합니다."""
+    question = ' '.join(ctx.args).strip()
+    if not question or len(question) > AI_MAX_QUESTION_CHARS:
+        await update.message.reply_text(f'사용법: /ask 영업이익률이 뭐야?\n질문은 {AI_MAX_QUESTION_CHARS}자 이내로 입력해주세요.')
+        return
+    previous = ctx.user_data.get('ask_task')
+    if previous and not previous.done():
+        await update.message.reply_text('앞선 질문에 답변하는 중입니다. 잠시 기다려주세요.')
+        return
+    pending = await update.message.reply_text('⏳ AI 답변 생성 중...')
+
+    async def respond() -> None:
+        try:
+            data, status = await _post('/ask', {'message': question})
+            if status != 200:
+                await pending.edit_text(str(data.get('detail', 'AI 응답 생성에 실패했습니다.')))
+                return
+            await pending.delete()
+            await _send_long(update, _md_to_html(data['answer']))
+        except Exception:
+            await pending.edit_text('AI 연결에 실패했습니다. /ai로 상태를 확인해주세요.')
+        finally:
+            ctx.user_data.pop('ask_task', None)
+
+    ctx.user_data['ask_task'] = ctx.application.create_task(respond(), update=update)
+
 
 async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """AI 상담 시작. /chat [회사명]"""
@@ -970,6 +1071,14 @@ async def send_trending_notifications(bot: Bot) -> None:
             logging.getLogger(__name__).warning("GitHub 정기 발송 실패 (%s)", type(exc).__name__)
 
 
+async def register_bot_commands(bot: Bot) -> None:
+    """슬래시 자동완성 설명과 명령어 메뉴 버튼을 텔레그램에 등록합니다."""
+    commands = [BotCommand(command, description) for command, description in TELEGRAM_COMMANDS]
+    for language in (None, 'ko', 'en'):
+        await bot.set_my_commands(commands, language_code=language)
+    await bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+
 def create_bot_application() -> Application:
     token = TELEGRAM_BOT_TOKEN
     if not token:
@@ -999,6 +1108,7 @@ def create_bot_application() -> Application:
 
     # 기업 분석
     app.add_handler(CommandHandler("start",     cmd_start))
+    app.add_handler(CommandHandler("help",      cmd_start))
     app.add_handler(CommandHandler("analysis",  cmd_analysis))
     app.add_handler(CommandHandler("business",  cmd_business))
     app.add_handler(CommandHandler("dividend",  cmd_dividend))
@@ -1010,6 +1120,8 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("buffett",   cmd_buffett_report))
     app.add_handler(CommandHandler("score",     cmd_score))
+    app.add_handler(CommandHandler("ask",       cmd_ask))
+    app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CommandHandler("insider",   cmd_insider))
 
     # 즐겨찾기
@@ -1021,7 +1133,7 @@ def create_bot_application() -> Application:
     app.add_handler(CallbackQueryHandler(handle_suggest_callback))
 
     # help 텍스트 입력 시 도움말
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^help$"), cmd_start))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(?i)^(help|/)$"), cmd_start))
 
     # 이스터에그
     async def _easter_egg(u, c):

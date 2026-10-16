@@ -3,6 +3,7 @@ uvicorn[standard]
 python-dotenv
 requests
 aiohttp
+async-timeout>=4.0.3
 beautifulsoup4
 matplotlib
 lxml

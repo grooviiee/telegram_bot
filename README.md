@@ -1,4 +1,6 @@
 ## Objective
+로컬 AI Telegram 사용법은 [로컬 AI 설정](docs/local-ai.md)을 참고하세요.
+
 7/1 일자 butler 서비스가 유료화가 되기 이전에 필요한 기능들을 빼온다.
 
 

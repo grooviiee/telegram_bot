@@ -97,7 +97,7 @@ async def summarize_project(project: dict) -> dict:
         readme = await fetch_readme(project['name'])
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError):
         warnings.append('README를 가져오지 못해 저장소 설명만 사용했습니다.')
-    if config.GEMINI_API_KEY:
+    if config.AI_PROVIDER == 'ollama' or config.GEMINI_API_KEY:
         try:
             summary = await call_gemini(json.dumps({'repository': project['name'],
                 'description': project['description'], 'readme': readme}, ensure_ascii=False),
@@ -135,7 +135,7 @@ async def build_digest(chat_id: int, now: datetime | None = None) -> dict:
     async def shared_summary(project: dict) -> dict:
         async def generate() -> dict:
             return await summarize_project(project)
-        key = f"{day}:{project['name']}:{bool(config.GEMINI_API_KEY)}"
+        key = f"{day}:{project['name']}:{config.AI_PROVIDER}:{config.OLLAMA_MODEL if config.AI_PROVIDER == 'ollama' else config.GEMINI_MODEL}:{bool(config.GEMINI_API_KEY)}"
         card, _ = await github_summary_cache.get_or_create(key, generate)
         return card
     projects = await asyncio.gather(*(shared_summary(project) for project in selected))

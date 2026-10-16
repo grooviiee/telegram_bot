@@ -7,7 +7,8 @@ import asyncio
 import json
 from datetime import datetime
 
-from config import GEMINI_CHAT_CONFIG, AI_EVIDENCE_RULES
+from config import (GEMINI_CHAT_CONFIG, AI_EVIDENCE_RULES, AI_PROVIDER, YEAR_RANGE,
+                    OLLAMA_CONTEXT_DETAIL_CHARS)
 from utils import fmt_krw, call_gemini_with_tools
 from services.dart import fetch_dart_financials_q, fetch_filing_list
 from services.scoring import (
@@ -366,8 +367,36 @@ def build_system_context(
     valuation: dict | None,
     recent_filings: list[dict],
     buffett_mode: bool = False,
+    question: str = '',
 ) -> str:
     """회사 공시 데이터를 Gemini 시스템 컨텍스트 문자열로 변환합니다."""
+    if AI_PROVIDER == 'ollama':
+        lines = [f'기업: {company_name}. 출처: DART 연간 재무제표. 아래 수치에 근거해 질문에 짧게 답하세요.',
+                 '숫자가 없는 항목은 확인 불가입니다. 비교 결과와 원인 추정을 구분하세요.']
+        if buffett_mode:
+            lines.append('장기 수익성·현금흐름·안전마진을 중심으로 설명하세요.')
+        details = {}
+        if any(word in question for word in ('사업', '매출구조', '제품', '경쟁')):
+            details['사업개요'] = ' '.join(
+                block.get('content', '') for section in business_sections
+                for block in section.get('blocks', []) if block.get('type') == 'text')
+        if any(word in question for word in ('배당', '주주환원')):
+            details['배당자료'] = dividends[-YEAR_RANGE:]
+        if any(word in question for word in ('가치', '주가', '평가', 'PER', 'PBR', '밸류')):
+            details['밸류에이션'] = valuation
+        if any(word in question for word in ('공시', '최근', '이슈')):
+            details['최근 공시 제목·접수정보(본문 아님)'] = recent_filings[:3]
+        for name, detail in details.items():
+            text = json.dumps(detail, ensure_ascii=False)
+            if len(text) > OLLAMA_CONTEXT_DETAIL_CHARS:
+                text = text[:OLLAMA_CONTEXT_DETAIL_CHARS] + ' [추가 자료 일부 생략]'
+            lines.append(f'{name}: {text}')
+        for row in sorted(financials, key=lambda r: r['year'])[-YEAR_RANGE:]:
+            lines.append(f"{row['year']}년: 매출 {fmt_krw(row.get('revenue'))}, "
+                         f"영업이익 {fmt_krw(row.get('operating_income'))}, "
+                         f"순이익 {fmt_krw(row.get('net_income'))}")
+        lines.append('자료는 위 연도 기준이며 최신 분기·주가를 의미하지 않습니다. 필요하면 추가 조회 도구를 사용하세요.')
+        return '\n'.join(lines)
     data_context = _build_data_context(
         company_name, business_sections, financials, dividends, valuation, recent_filings,
     )
@@ -597,7 +626,7 @@ async def chat_with_gemini(
     """
     contents = []
 
-    if buffett_mode:
+    if buffett_mode and AI_PROVIDER != 'ollama':
         contents.extend(BUFFETT_FEW_SHOT_EXAMPLES)
     else:
         contents.append({

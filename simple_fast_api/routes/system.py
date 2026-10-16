@@ -10,7 +10,7 @@ import database
 from config import WEBHOOK_SECRET_TOKEN
 from cache import (
     dividend_cache, financials_cache, dividend_json_cache, business_cache,
-    quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
+    quarterly_financials_cache, quarterly_dividend_cache, quarterly_profit_cache, insider_trend_cache, valuation_cache,
     report_cache, buffett_report_cache, events_cache, filings_cache, insider_cache, insider_ai_cache, score_cache,
 )
 from services.cache_warmup import warm_popular_companies, TOP_N
@@ -26,12 +26,13 @@ async def cache_status():
     keys = [
         "dividend_data", "financials", "analyze_dividends_json", "business_overview",
         "quarterly_financials", "quarterly_dividend", "valuation", "report", "buffett_report",
-        "events", "filings", "insider", "insider_ai", "score",
+        "events", "filings", "insider", "insider_ai", "score", "quarterly_profit", "insider_trend",
     ]
     caches = [
         dividend_cache, financials_cache, dividend_json_cache, business_cache,
         quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
         report_cache, buffett_report_cache, events_cache, filings_cache, insider_cache, insider_ai_cache, score_cache,
+        quarterly_profit_cache, insider_trend_cache,
     ]
     infos = await asyncio.gather(*[c.info() for c in caches])
     return JSONResponse(content=dict(zip(keys, infos)))
@@ -44,6 +45,7 @@ async def cache_clear(company_name: str = None):
         dividend_cache, financials_cache, dividend_json_cache,
         business_cache, report_cache, buffett_report_cache, events_cache, filings_cache, insider_cache, insider_ai_cache, score_cache,
         quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
+        quarterly_profit_cache, insider_trend_cache,
     ]
     if company_name:
         results = await asyncio.gather(*[c.clear(company_name) for c in caches])
