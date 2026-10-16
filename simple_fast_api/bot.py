@@ -22,7 +22,8 @@ from telegram.error import Forbidden
 
 import database
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
-                    TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT)
+                    TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT,
+                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS)
 from services import github_trending
 from utils import fmt_krw
 from services.profit_chart import render_profit_chart
@@ -80,7 +81,8 @@ async def _get(path: str, timeout: int | None = None) -> tuple[dict, int]:
 async def _post(path: str, payload: dict) -> tuple[dict, int]:
     """로컬 FastAPI 서버에 POST 요청."""
     session = get_session()
-    async with session.post(f"{API_BASE}{path}", json=payload) as resp:
+    async with session.post(f"{API_BASE}{path}", json=payload,
+                            timeout=aiohttp.ClientTimeout(total=AI_HTTP_TIMEOUT)) as resp:
         return await resp.json(), resp.status
 
 
@@ -428,6 +430,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "🏦 /health [회사명]   — 재무 건전성\n"
         "💹 /valuation [회사명] — 밸류에이션 지표\n\n"
         "<b>── AI 분석 ──</b>\n"
+        "🤖 /ask [질문] — 일반 AI 질문\n"
+        "🖥 /ai — 모델·GPU 상태\n"
         "🤖 /report [회사명]  — AI 종합 투자 리포트\n"
         "🧙 /buffett [회사명] — 워렌 버핏 스타일 리포트\n"
         "📊 /score [회사명]   — 정량 투자 스코어 (0~100)\n"
@@ -582,7 +586,7 @@ async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         f"⏳ <i>'{_e(company)}' AI 리포트 생성 중... (최대 60초 소요)</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/report/{company}")
+    data, status = await _get(f"/report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
         await _show_suggestions(msg, company, "report")
         return
@@ -601,7 +605,7 @@ async def cmd_buffett_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         f"⏳ <i>'{_e(company)}' 버핏 리포트 생성 중... (최대 60초 소요)</i>",
         parse_mode=ParseMode.HTML,
     )
-    data, status = await _get(f"/buffett-report/{company}")
+    data, status = await _get(f"/buffett-report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
         await _show_suggestions(msg, company, "buffett")
         return
@@ -713,6 +717,50 @@ async def _send_insider_chart(msg, company: str) -> None:
 # -------------------------------------------------------------------
 # AI 상담 (ConversationHandler)
 # -------------------------------------------------------------------
+
+async def cmd_ai(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """현재 AI 모델과 GPU 적재 상태를 표시합니다."""
+    try:
+        data, status = await _get('/ai/status')
+        if status != 200:
+            raise RuntimeError('status')
+        state = '연결됨' if data.get('available') else '연결되지 않음'
+        gpu = data.get('gpu_bytes', 0)
+        detail = f'GPU 메모리: {gpu / 1024 ** 3:.2f} GiB' if gpu else 'GPU: 현재 적재된 모델 없음'
+        await update.message.reply_text(
+            f"AI: {_e(data.get('provider'))}\n모델: {_e(data.get('model'))}\n상태: {state}\n{detail}",
+            parse_mode=ParseMode.HTML)
+    except Exception:
+        await update.message.reply_text('AI 상태를 확인하지 못했습니다. 서버 연결을 확인해주세요.')
+
+
+async def cmd_ask(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """기업 조회 없이 일반 질문을 AI에 전달합니다."""
+    question = ' '.join(ctx.args).strip()
+    if not question or len(question) > AI_MAX_QUESTION_CHARS:
+        await update.message.reply_text(f'사용법: /ask 영업이익률이 뭐야?\n질문은 {AI_MAX_QUESTION_CHARS}자 이내로 입력해주세요.')
+        return
+    previous = ctx.user_data.get('ask_task')
+    if previous and not previous.done():
+        await update.message.reply_text('앞선 질문에 답변하는 중입니다. 잠시 기다려주세요.')
+        return
+    pending = await update.message.reply_text('⏳ AI 답변 생성 중...')
+
+    async def respond() -> None:
+        try:
+            data, status = await _post('/ask', {'message': question})
+            if status != 200:
+                await pending.edit_text(str(data.get('detail', 'AI 응답 생성에 실패했습니다.')))
+                return
+            await pending.delete()
+            await _send_long(update, _md_to_html(data['answer']))
+        except Exception:
+            await pending.edit_text('AI 연결에 실패했습니다. /ai로 상태를 확인해주세요.')
+        finally:
+            ctx.user_data.pop('ask_task', None)
+
+    ctx.user_data['ask_task'] = ctx.application.create_task(respond(), update=update)
+
 
 async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """AI 상담 시작. /chat [회사명]"""
@@ -1072,6 +1120,8 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("report",    cmd_report))
     app.add_handler(CommandHandler("buffett",   cmd_buffett_report))
     app.add_handler(CommandHandler("score",     cmd_score))
+    app.add_handler(CommandHandler("ask",       cmd_ask))
+    app.add_handler(CommandHandler("ai",        cmd_ai))
     app.add_handler(CommandHandler("insider",   cmd_insider))
 
     # 즐겨찾기

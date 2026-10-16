@@ -7,7 +7,7 @@ import aiohttp
 from config import (
     GEMINI_URL, GEMINI_SUMMARY_CONFIG, GEMINI_MAX_TOOL_ROUNDS,
     NAVER_CLIENT_ID, NAVER_CLIENT_SECRET, NAVER_NEWS_URL,
-    GROQ_API_KEY, GROQ_MODEL, GROQ_URL,
+    GROQ_API_KEY, GROQ_MODEL, GROQ_URL, AI_PROVIDER,
 )
 
 
@@ -74,6 +74,11 @@ async def call_gemini(
     """
     if generation_config is None:
         generation_config = GEMINI_SUMMARY_CONFIG
+
+    if AI_PROVIDER == 'ollama':
+        from services.local_ai import call_ollama
+        return await call_ollama(prompt, system_instruction=system_instruction, contents=contents,
+                                 generation_config=generation_config)
 
     payload: dict = {"generationConfig": generation_config}
 
@@ -174,6 +179,13 @@ async def call_groq(
     무료 티어는 분당 토큰 한도(TPM)가 있어 429가 흔하다. 에러 메시지에 포함된
     "try again in Ns" 안내를 파싱해 그만큼 대기 후 한 번 재시도한다.
     """
+    if AI_PROVIDER == 'ollama':
+        from services.local_ai import call_ollama
+        instruction = system_instruction or ''
+        if json_mode:
+            instruction += '\n응답은 JSON 객체 하나만 작성하세요.'
+        return await call_ollama(prompt, system_instruction=instruction,
+                                 generation_config={'temperature': temperature})
     messages = []
     if system_instruction:
         messages.append({"role": "system", "content": system_instruction})
@@ -251,6 +263,11 @@ async def call_gemini_with_tools(
     """
     if generation_config is None:
         generation_config = GEMINI_SUMMARY_CONFIG
+
+    if AI_PROVIDER == 'ollama':
+        from services.local_ai import call_ollama
+        return await call_ollama(system_instruction=system_instruction, contents=contents,
+                                 generation_config=generation_config, tools=tools, tool_executor=tool_executor)
 
     payload_base: dict = {
         "generationConfig": generation_config,
