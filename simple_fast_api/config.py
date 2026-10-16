@@ -31,6 +31,7 @@ OLLAMA_KEEP_ALIVE = '15m'
 AI_HTTP_TIMEOUT = 210 if AI_PROVIDER == 'ollama' else 120
 AI_MAX_QUESTION_CHARS = 2000
 OLLAMA_PROMPT_VERSION = 1
+OLLAMA_CONTEXT_DETAIL_CHARS = 500
 OLLAMA_SYSTEM_RULES = (
     '한국어로 질문에 직접 답하세요. 최종 답변만 간결하게 작성하세요. '
     '재무 수치는 제공된 데이터만 사용하고, 없는 값·최신 뉴스·원인을 추측하지 마세요. '

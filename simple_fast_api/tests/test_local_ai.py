@@ -9,6 +9,14 @@ from services import chat
 
 
 class LocalAnswerTests(unittest.TestCase):
+    def test_local_context_keeps_requested_business_and_dividends(self):
+        with patch.object(chat, 'AI_PROVIDER', 'ollama'):
+            context = chat.build_system_context('테스트',
+                [{'blocks': [{'type': 'text', 'content': '반도체 사업'}]}], [],
+                [{'year': 2025, 'dividend': 1000}], None, [], question='사업 구조와 배당 추세')
+        self.assertIn('반도체 사업', context)
+        self.assertIn('1000', context)
+
     def test_local_context_preserves_financial_years(self):
         financials = [{'year': year, 'revenue': 100_000_000, 'operating_income': 10_000_000,
                        'net_income': 5_000_000} for year in range(2021, 2026)]

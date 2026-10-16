@@ -121,7 +121,7 @@ async def chat(company_name: str, req: ChatRequest):
     buffett_mode = req.mode == "buffett"
     system_context = build_system_context(
         company_name, business_sections, financials, dividends, valuation, filings,
-        buffett_mode=buffett_mode,
+        buffett_mode=buffett_mode, question=req.message,
     )
 
     quality = data['data_quality']
