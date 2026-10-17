@@ -23,6 +23,11 @@ from services.scoring import (
 
 CHAT_TOOLS = [
     {
+        'name': 'search_annual_report',
+        'description': '사업보고서 전체 본문·표에서 질문 관련 근거와 공시 위치를 검색합니다. 사업·경쟁력·위험·배당정책 설명에 사용합니다.',
+        'parameters': {'type': 'object', 'properties': {'query': {'type': 'string', 'description': '질문 또는 확인할 주제'}}, 'required': ['query']},
+    },
+    {
         'name': 'get_segment_financials',
         'description': '사업보고서에서 검증한 연결 사업부별 영업이익·매출과 비중을 조회합니다. 비중은 Python 계산 결과입니다.',
         'parameters': {'type': 'object', 'properties': {'year': {'type': 'integer', 'description': '재무 기준연도. 생략하면 최신 연간.'}}},
@@ -450,6 +455,11 @@ def create_tool_executor(
 ):
     """chat 엔드포인트에서 사용할 tool_executor 클로저를 생성합니다."""
     async def execute(name: str, args: dict) -> dict:
+        if name == 'search_annual_report':
+            from services.report_retrieval import retrieve_report_evidence
+            result = await retrieve_report_evidence(company_name, corp_code, str(args.get('query', '')))
+            return {'fiscal_year': result['report']['fiscal_year'], 'source': result['report']['source'],
+                    'evidence': [{'heading': s['heading'], 'quote': s['body'][:300]} for s in result['evidence'][:2]]}
         if name == 'get_segment_financials':
             from services.segments import segment_data
             try:

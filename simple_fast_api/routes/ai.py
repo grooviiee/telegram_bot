@@ -1,6 +1,7 @@
 """AI 분석 라우트 (리포트, 챗봇, 내부자 거래)."""
 import asyncio
 import json
+import re
 from config import (GEMINI_API_KEY, DART_ELESTOCK_URL, AI_PROVIDER, GEMINI_MODEL,
                     OLLAMA_MODEL, AI_MAX_QUESTION_CHARS, AI_EVIDENCE_RULES, OLLAMA_MAX_OUTPUT_TOKENS)
 from cache import insider_cache, insider_ai_cache
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from utils import call_gemini
 from services.local_ai import ollama_status
+from services.report_retrieval import answer_from_report
 from services.segments import (segment_data, is_segment_question, format_segment_answer,
                                resolve_segment_request, explain_segment_contribution)
 
@@ -109,7 +111,6 @@ async def chat(company_name: str, req: ChatRequest):
     await database.record_search(company_name)
     corp_code = await resolve_corp_code(company_name)
     if is_segment_question(req.message, req.history):
-        import re
         if re.search(r'분기|반기|\d\s*[Qq]|[Qq]\s*\d', req.message):
             return JSONResponse(content={'answer': '현재 사업부별 손익은 연간 사업보고서 기준입니다. 분기·반기 수치를 연간 수치로 대신하지 않습니다.', 'ai_used': False})
         year, revenue = resolve_segment_request(req.message, req.history, None)
@@ -127,6 +128,9 @@ async def chat(company_name: str, req: ChatRequest):
         return JSONResponse(content={"answer": factual, "mode": req.mode, "ai_used": False})
     if AI_PROVIDER != 'ollama' and not GEMINI_API_KEY:
         raise HTTPException(503, 'AI 분석 키가 설정되지 않았습니다.')
+    # 계산 도구가 필요한 상담은 기존 경로로, 서술형 질문은 전체 공시 근거 검색으로 처리합니다.
+    if not re.search(r'내재가치|적정\s*주가|DCF|듀퐁|DuPont|분기|ROE.*분해', req.message, re.IGNORECASE):
+        return JSONResponse(content=await answer_from_report(company_name, corp_code, req.message, req.history))
     data = await gather_company_data(corp_code, company_name)
     business_sections = data['business_sections']
     financials = data['financials']

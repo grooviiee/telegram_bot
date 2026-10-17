@@ -6,6 +6,9 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from services.segments import segment_data
+from services.report_retrieval import retrieve_report_evidence
+from config import AI_MAX_QUESTION_CHARS
+from fastapi import Query
 
 import database
 from cache import (
@@ -22,6 +25,13 @@ from services.quarterly_profit import quarterly_profit_data
 from services.insider_trend import insider_trend_data
 
 router = APIRouter()
+
+
+@router.get('/evidence/{company_name}')
+async def get_report_evidence(company_name: str, query: str = Query(min_length=1, max_length=AI_MAX_QUESTION_CHARS)) -> JSONResponse:
+    """모델 호출 없이 질문 관련 공시 원문과 위치·출처를 반환합니다."""
+    corp_code = await resolve_corp_code(company_name)
+    return JSONResponse(content=await retrieve_report_evidence(company_name, corp_code, query))
 
 
 @router.get('/segments/{company_name}')
