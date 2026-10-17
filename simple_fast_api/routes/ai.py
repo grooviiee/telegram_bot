@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from utils import call_gemini
 from services.local_ai import ollama_status
 from services.report_retrieval import answer_from_report
+from services.changes import annual_changes_data
+from services.dart import get_company_info
 from services.segments import (segment_data, is_segment_question, format_segment_answer,
                                resolve_segment_request, explain_segment_contribution)
 
@@ -33,6 +35,14 @@ from services.scoring import cached_investment_score
 from services.events import analyze_price_events
 
 router = APIRouter()
+
+
+@router.get('/changes/{company_name}')
+async def get_annual_changes(company_name: str) -> JSONResponse:
+    """최근 결산연도와 직전 연도 사업보고서의 대응 본문 변화를 제공합니다."""
+    identity = await asyncio.to_thread(get_company_info, company_name)
+    result = await annual_changes_data(company_name, identity['corp_code'], identity['company_name'])
+    return JSONResponse(content=result)
 
 
 class AskRequest(BaseModel):
