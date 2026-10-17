@@ -23,7 +23,8 @@ from telegram.error import Forbidden
 import database
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
                     TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT,
-                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS)
+                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS, CHANGES_HTTP_TIMEOUT, TELEGRAM_MSG_LIMIT)
+from services.changes import format_change_blocks
 from services import github_trending
 from utils import fmt_krw
 from services.profit_chart import render_profit_chart
@@ -411,6 +412,10 @@ async def handle_suggest_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     elif cmd == "insider":
         ctx.application.create_task(_send_insider_chart(query.message, company), update=update)
 
+    elif cmd == 'changes':
+        reply_update = Update(update.update_id, message=query.message)
+        await _launch_changes(reply_update, ctx, company, query.message)
+
     elif cmd in ("report", "buffett"):
         endpoint = {"report": "report", "buffett": "buffett-report"}[cmd]
         data, status = await _get(f"/{endpoint}/{company}")
@@ -435,6 +440,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "<b>── 기업 분석 ──</b>\n"
         "📋 /analysis [회사명] — 종합 분석 요약\n"
         "🏢 /business [회사명] — 사업의 내용\n"
+        "🔎 /changes [회사명] — 최근 두 해 사업보고서 서술 변화\n"
         "📊 /dividend [회사명] — 5개년 배당금\n"
         "📈 /profit [회사명]   — 최근 3년 분기별 수익성 그래프\n"
         "🏦 /health [회사명]   — 재무 건전성\n"
@@ -459,6 +465,51 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "<i>즐겨찾기 등록 시 매일 오전 9시(KST) 요약 알림을 받습니다.</i>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_changes(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """두 사업보고서의 주요 제품·사업 방향·위험 서술 변경 비교를 시작합니다."""
+    company = ' '.join(ctx.args).strip()
+    if not company:
+        await update.message.reply_text('사용법: /changes [회사명 또는 종목코드]\n예: /changes 신성이엔지')
+        return
+    await _launch_changes(update, ctx, company)
+
+
+async def _launch_changes(update: Update, ctx: ContextTypes.DEFAULT_TYPE, company: str, pending=None) -> None:
+    previous = ctx.user_data.get('changes_task')
+    if previous and not previous.done():
+        if pending is not None:
+            await pending.edit_text('앞선 사업보고서 비교를 진행 중입니다. 잠시 기다려주세요.')
+        else:
+            await update.message.reply_text('앞선 사업보고서 비교를 진행 중입니다. 잠시 기다려주세요.')
+        return
+    if pending is None:
+        pending = await update.message.reply_text(
+            f"⏳ <b>{_e(company)}</b> 최근 두 해의 사업보고서를 비교하고 있습니다.\n첫 조회는 두 보고서 준비로 시간이 더 걸릴 수 있습니다.",
+            parse_mode=ParseMode.HTML)
+
+    async def respond() -> None:
+        try:
+            result, status = await _get(f'/changes/{company}', timeout=CHANGES_HTTP_TIMEOUT)
+            if status != 200:
+                await _show_suggestions(pending, company, 'changes', result, status)
+                return
+            await pending.delete()
+            for block in format_change_blocks(result):
+                while block:
+                    part = block[:TELEGRAM_MSG_LIMIT]
+                    while len(_e(part)) > TELEGRAM_MSG_LIMIT:
+                        part = part[:len(part) // 2]
+                    await _send_long(update, _e(part))
+                    block = block[len(part):]
+        except Exception as exc:
+            logging.getLogger(__name__).warning('사업보고서 비교 실패 (%s)', type(exc).__name__)
+            await update.message.reply_text('사업보고서 비교를 완료하지 못했습니다. 잠시 후 /changes로 다시 시도해주세요.')
+        finally:
+            ctx.user_data.pop('changes_task', None)
+
+    ctx.user_data['changes_task'] = ctx.application.create_task(respond(), update=update)
 
 
 async def cmd_analysis(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1124,6 +1175,7 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("help",      cmd_start))
     app.add_handler(CommandHandler("analysis",  cmd_analysis))
     app.add_handler(CommandHandler("business",  cmd_business))
+    app.add_handler(CommandHandler("changes",   cmd_changes))
     app.add_handler(CommandHandler("dividend",  cmd_dividend))
     app.add_handler(CommandHandler("profit",    cmd_profitability))
     app.add_handler(CommandHandler("health",    cmd_financial_health))

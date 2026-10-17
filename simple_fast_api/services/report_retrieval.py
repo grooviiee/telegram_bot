@@ -533,6 +533,49 @@ async def report_index_status() -> dict:
     return await asyncio.to_thread(read)
 
 
+async def annual_comparison_documents(company: str, corp_code: str) -> list[dict]:
+    """최근 결산연도와 직전 연도의 주본문을 동일한 색인에서 읽습니다."""
+    async def load() -> dict:
+        try:
+            return await asyncio.to_thread(_listing, corp_code)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(502, '비교할 사업보고서 목록을 조회하지 못했습니다.') from None
+    manifest, _ = await rag_manifest_cache.get_or_create(company, load)
+    latest = manifest['reports'][0]
+    previous = next((r for r in manifest['reports'] if r['fiscal_year'] == latest['fiscal_year'] - 1), None)
+    if previous is None:
+        raise HTTPException(404, '직전 결산연도의 사업보고서가 없어 연속된 두 해를 비교할 수 없습니다.')
+    if previous['fiscal_month'] != latest['fiscal_month']:
+        raise HTTPException(422, '두 보고서의 결산월이 달라 같은 기준으로 비교할 수 없습니다.')
+
+    def read(metadata: dict) -> dict:
+        with _connect() as connection:
+            rows = [dict(r) for r in connection.execute(
+                'SELECT heading,kind,filename,ordinal,body FROM chunks WHERE corp=? AND receipt=? AND kind=? ORDER BY ordinal',
+                (corp_code, metadata['receipt_no'], 'text')).fetchall()]
+        filenames = set(r['filename'] for r in rows)
+        main = next((f for f in sorted(filenames) if Path(f).stem == metadata['receipt_no']), None)
+        if main is None and len(filenames) == 1:
+            main = next(iter(filenames))
+        if main is None:
+            raise HTTPException(422, '비교할 사업보고서 주본문을 식별하지 못했습니다. 첨부 문서를 임의로 비교하지 않습니다.')
+        return {'report': metadata, 'passages': [r for r in rows if r['filename'] == main], 'filename': main}
+
+    documents = []
+    try:
+        for report in (previous, latest):
+            async with _index_slots:
+                metadata, _ = await asyncio.to_thread(_index_report, corp_code, report)
+                documents.append(await asyncio.to_thread(read, metadata))
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, '비교할 공시 본문을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.') from None
+    return documents
+
+
 async def clear_report_index(company: str | None = None) -> bool:
     """요청한 회사 또는 전체 공시 색인을 명시적으로 삭제합니다."""
     corp_code = None

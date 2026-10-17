@@ -2,6 +2,7 @@
 로컬 AI Telegram 사용법은 [로컬 AI 설정](docs/local-ai.md)을 참고하세요.
 사업부별 손익·비중 질문은 [사업부 손익 상담](docs/segment-profit.md)을 참고하세요.
 공시 전체에서 근거를 찾아 설명하는 기능은 [공시 검색 기반 상담](docs/report-retrieval.md)을 참고하세요.
+`/changes`로 최근 두 해를 비교하는 기능은 [사업보고서 서술 변화](docs/annual-changes.md)를 참고하세요.
 
 7/1 일자 butler 서비스가 유료화가 되기 이전에 필요한 기능들을 빼온다.
 

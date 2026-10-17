@@ -33,6 +33,29 @@ AI_MAX_QUESTION_CHARS = 2000
 OLLAMA_PROMPT_VERSION = 1
 OLLAMA_CONTEXT_DETAIL_CHARS = 500
 
+# --- 사업보고서 서술 변화 비교 ---
+CHANGES_VERSION = 4
+CHANGES_TOPICS = {
+    'products': ('주요 제품·사업', ('주요제품', '제품및서비스', '사업의개요', '사업개요', '주요사업의내용'),
+                 ('제품', '서비스', '생산', '제조', '사업부문')),
+    'strategy': ('사업 방향·투자', ('연구개발', '신규사업', '영업개황', '시장여건', '경영전략', '투자'),
+                 ('전략', '신규', '확대', '추진', '투자', '개발', '성장')),
+    'risk': ('위험 요인', ('위험', '리스크'),
+             ('위험', '리스크', '환율', '원재료', '불확실', '경쟁')),
+}
+CHANGES_MIN_SENTENCE_CHARS = 35
+CHANGES_MIN_TOPIC_TERMS = 2
+CHANGES_MAX_SECTION_SENTENCES = 100
+CHANGES_MAX_SECTION_CHARS = 80000
+CHANGES_MAX_SENTENCE_CHARS = 2000
+CHANGES_MIN_SIMILARITY = .38
+CHANGES_MAX_SIMILARITY = .98
+CHANGES_QUOTE_CHARS = 300
+CHANGES_PHRASE_CHARS = 100
+CHANGES_MIN_EDIT_LETTERS = 3
+CHANGES_HTTP_TIMEOUT = 2 * 120 + 60
+
+
 # --- 공시 근거 검색 (CPU·SQLite, 외부 임베딩 API 불필요) ---
 RAG_INDEX_VERSION = 6
 RAG_CHUNK_CHARS = 900
@@ -145,6 +168,7 @@ TELEGRAM_COMMANDS = (
     ('ai', '현재 AI 모델과 GPU 실행 상태 확인'),
     ('analysis', '기업 재무 요약 · 예: /analysis 삼성전자'),
     ('business', '사업 내용 · 예: /business 삼성전자'),
+    ('changes', '최근 두 해 사업보고서 변화 · 예: /changes 신성이엔지'),
     ('dividend', '5개년 배당금 · 예: /dividend 삼성전자'),
     ('profit', '최근 3년 분기별 수익성 그래프 · 예: /profit 삼성전자'),
     ('health', '재무 건전성 · 예: /health 삼성전자'),
