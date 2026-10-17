@@ -32,6 +32,16 @@ AI_HTTP_TIMEOUT = 210 if AI_PROVIDER == 'ollama' else 120
 AI_MAX_QUESTION_CHARS = 2000
 OLLAMA_PROMPT_VERSION = 1
 OLLAMA_CONTEXT_DETAIL_CHARS = 500
+
+# --- 사업부별 손익 원문 파싱 ---
+SEGMENT_PARSER_VERSION = 3
+SEGMENT_DOCUMENT_TIMEOUT = 120
+SEGMENT_CONTEXT_CHARS = 1800
+SEGMENT_MAX_TABLE_ROWS = 200
+SEGMENT_MAX_TABLE_COLUMNS = 30
+SEGMENT_UNIT_MULTIPLIERS = {'원': 1, '천원': 1000, '백만원': 1000000,
+                            '백만': 1000000, '억원': 100000000}
+SEGMENT_TOTAL_LABELS = ('합계', '총계', '연결조정후', '연결합계')
 OLLAMA_SYSTEM_RULES = (
     '한국어로 질문에 직접 답하세요. 최종 답변만 간결하게 작성하세요. '
     '재무 수치는 제공된 데이터만 사용하고, 없는 값·최신 뉴스·원인을 추측하지 마세요. '

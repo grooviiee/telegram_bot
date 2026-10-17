@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from services.segments import segment_data
 
 import database
 from cache import (
@@ -21,6 +22,14 @@ from services.quarterly_profit import quarterly_profit_data
 from services.insider_trend import insider_trend_data
 
 router = APIRouter()
+
+
+@router.get('/segments/{company_name}')
+async def get_segments(company_name: str, year: int | None = None) -> JSONResponse:
+    """연결 합계를 검증한 사업부별 영업이익과 기여 비중을 반환합니다."""
+    corp_code = await resolve_corp_code(company_name)
+    result, cached = await segment_data(company_name, corp_code, year)
+    return JSONResponse(content={**result, 'cached': cached})
 
 
 class CompanyRequest(BaseModel):
