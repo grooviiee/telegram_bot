@@ -268,16 +268,26 @@ def fmt_business_text(company: str, sections: list, cached: bool) -> str:
 # 유사 기업 추천 (404 처리 공통 헬퍼)
 # -------------------------------------------------------------------
 
-async def _show_suggestions(msg, query: str, cmd: str) -> None:
-    """검색 실패 시 유사 기업명 버튼을 보여줍니다."""
+async def _show_suggestions(msg, query: str, cmd: str, data: dict | None = None, status: int = 404) -> None:
+    """기업 식별 실패와 자료 부재·외부 장애를 구분하여 안내합니다."""
+    if status != 404:
+        await msg.edit_text(f"❌ {_e((data or {}).get('detail', '자료 조회 중 오류가 발생했습니다.'))}", parse_mode=ParseMode.HTML)
+        return
+    identity, identity_status = await _get(f'/companies/resolve/{query}')
+    if identity_status == 200:
+        detail = (data or {}).get('detail', '요청한 자료가 없습니다.')
+        await msg.edit_text(f"❌ <b>{_e(identity['company_name'])}</b> 기업은 확인했지만 요청한 자료를 찾지 못했습니다.\n{_e(detail)}", parse_mode=ParseMode.HTML)
+        return
+    if identity_status != 404:
+        await msg.edit_text(f"❌ {_e(identity.get('detail', '기업 확인 중 오류가 발생했습니다.'))}", parse_mode=ParseMode.HTML)
+        return
     from services.dart import search_similar_companies
     loop = asyncio.get_event_loop()
     suggestions = await loop.run_in_executor(None, search_similar_companies, query, 8)
 
     if not suggestions:
         await msg.edit_text(
-            f"❌ <b>'{_e(query)}'</b> 기업을 찾을 수 없습니다.\n"
-            "회사 정식 명칭으로 다시 시도해 주세요.",
+            f"❌ {_e(identity.get('detail', '기업을 찾을 수 없습니다. 정식명 또는 6자리 종목코드로 검색해주세요.'))}",
             parse_mode=ParseMode.HTML,
         )
         return
@@ -461,7 +471,7 @@ async def cmd_analysis(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/financials/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "analysis")
+        await _show_suggestions(msg, company, "analysis", data, status)
         return
     text = fmt_analysis(data["company_name"], data["financials"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -477,7 +487,7 @@ async def cmd_business(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/business-overview/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "business")
+        await _show_suggestions(msg, company, "business", data, status)
         return
     text = fmt_business_text(
         data["company_name"], data.get("sections", []), data.get("cached", False)
@@ -496,7 +506,7 @@ async def cmd_dividend(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/dividend-data/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "dividend")
+        await _show_suggestions(msg, company, "dividend", data, status)
         return
     text = fmt_dividend(data["company_name"], data["dividend_data"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -519,7 +529,7 @@ async def _send_profit_chart(msg, company: str) -> None:
     try:
         data, status = await _get(f"/profit-quarterly/{company}")
         if status == 404:
-            await _show_suggestions(msg, company, "profit")
+            await _show_suggestions(msg, company, "profit", data, status)
             return
         if status != 200:
             await msg.edit_text(f"❌ {_e(data.get('detail', '분기 실적 조회 실패'))}", parse_mode=ParseMode.HTML)
@@ -555,7 +565,7 @@ async def cmd_financial_health(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     )
     data, status = await _get(f"/financials/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "health")
+        await _show_suggestions(msg, company, "health", data, status)
         return
     text = fmt_financial_health(data["company_name"], data["financials"], data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -571,7 +581,7 @@ async def cmd_valuation(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/valuation/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "valuation")
+        await _show_suggestions(msg, company, "valuation", data, status)
         return
     text = fmt_valuation(data["company_name"], data, data.get("cached", False))
     await msg.edit_text(text, parse_mode=ParseMode.HTML)
@@ -588,7 +598,7 @@ async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
-        await _show_suggestions(msg, company, "report")
+        await _show_suggestions(msg, company, "report", data, status)
         return
     header = f"🤖 <b>{_e(data['company_name'])} AI 종합 투자 리포트</b>\n\n"
     body = _md_to_html(data.get("report", ""))
@@ -607,7 +617,7 @@ async def cmd_buffett_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     )
     data, status = await _get(f"/buffett-report/{company}", timeout=AI_HTTP_TIMEOUT)
     if status != 200:
-        await _show_suggestions(msg, company, "buffett")
+        await _show_suggestions(msg, company, "buffett", data, status)
         return
     header = f"🧙 <b>{_e(data['company_name'])} 워렌 버핏 스타일 리포트</b>\n\n"
     body = _md_to_html(data.get("report", ""))
@@ -630,7 +640,7 @@ async def cmd_score(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
     data, status = await _get(f"/score/{company}")
     if status != 200:
-        await _show_suggestions(msg, company, "score")
+        await _show_suggestions(msg, company, "score", data, status)
         return
 
     name = _e(data["company_name"])
@@ -685,7 +695,7 @@ async def _send_insider_chart(msg, company: str) -> None:
     try:
         data, status = await _get(f"/insider-trend/{company}", timeout=INSIDER_REQUEST_TIMEOUT)
         if status == 404:
-            await _show_suggestions(msg, company, 'insider')
+            await _show_suggestions(msg, company, 'insider', data, status)
             return
         if status != 200:
             await msg.edit_text(f"❌ {_e(data.get('detail', '내부자 공시 조회 실패'))}", parse_mode=ParseMode.HTML)
@@ -774,14 +784,15 @@ async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     msg = await update.message.reply_text(
         f"⏳ <i>'{_e(company)}' 공시 데이터 불러오는 중...</i>", parse_mode=ParseMode.HTML
     )
-    # 기업 유효성 확인
-    data, status = await _get(f"/financials/{company}")
+    # 기업 식별은 재무자료 제공 여부와 별도로 확인합니다.
+    data, status = await _get(f"/companies/resolve/{company}")
     if status != 200:
         await msg.edit_text(f"❌ {_e(data.get('detail', '기업을 찾을 수 없습니다.'))}", parse_mode=ParseMode.HTML)
         return ConversationHandler.END
 
     resolved = data.get("company_name", company)
     ctx.user_data["chat_company"] = resolved
+    ctx.user_data["chat_company_query"] = data.get('stock_code') or company
     ctx.user_data["chat_history"] = []
 
     await msg.edit_text(
@@ -797,6 +808,7 @@ async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """CHAT_ACTIVE 상태에서 사용자 메시지 처리."""
     company = ctx.user_data.get("chat_company", "")
+    company_query = ctx.user_data.get('chat_company_query', company)
     history = ctx.user_data.get("chat_history", [])
     user_msg = update.message.text.strip()
 
@@ -809,7 +821,7 @@ async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
         "history": history,
         "mode": "buffett",
     }
-    data, status = await _post(f"/chat/{company}", payload)
+    data, status = await _post(f"/chat/{company_query}", payload)
 
     if status != 200:
         await typing_msg.edit_text(
@@ -832,6 +844,7 @@ async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
 async def cmd_chat_end(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """AI 상담 종료."""
     company = ctx.user_data.pop("chat_company", "")
+    ctx.user_data.pop('chat_company_query', None)
     ctx.user_data.pop("chat_history", None)
     name = f"'{_e(company)}' " if company else ""
     await update.message.reply_text(
