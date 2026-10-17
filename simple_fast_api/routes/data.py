@@ -16,7 +16,7 @@ from cache import (
     quarterly_financials_cache, quarterly_dividend_cache, valuation_cache,
 )
 from services.dart import (
-    get_corp_code, resolve_corp_code, fetch_dart_financials, fetch_dividend_per_share,
+    get_corp_code, get_company_info, resolve_corp_code, fetch_dart_financials, fetch_dividend_per_share,
     fetch_dart_financials_q, fetch_dividend_per_share_q,
     fetch_business_overview, download_reports_logic,
 )
@@ -25,6 +25,13 @@ from services.quarterly_profit import quarterly_profit_data
 from services.insider_trend import insider_trend_data
 
 router = APIRouter()
+
+
+@router.get('/companies/resolve/{company_name}')
+async def resolve_company(company_name: str) -> JSONResponse:
+    """재무자료 유무와 무관하게 기업명·종목코드와 DART 고유번호를 확인합니다."""
+    result = await asyncio.to_thread(get_company_info, company_name)
+    return JSONResponse(content={**result, 'cached': False})
 
 
 @router.get('/evidence/{company_name}')

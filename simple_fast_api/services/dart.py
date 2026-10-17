@@ -1,5 +1,12 @@
 """DART Open API 호출 전용 헬퍼 함수."""
 import asyncio, io, re, zipfile, requests
+import os
+import tempfile
+import threading
+import time
+import unicodedata
+import xml.etree.ElementTree as ET
+from functools import lru_cache
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from bs4 import BeautifulSoup
@@ -8,7 +15,9 @@ from config import (
     DART_API_KEY, DART_BASE_URL, DART_CORP_CODE_URL, DART_LIST_URL,
     DART_FINANCIALS_URL, DART_DIVIDEND_URL, DART_ELESTOCK_URL,
     DART_DOCUMENT_URL, REPORTS_DIR, FS_DIV_ORDER, QUARTER_REPRT_CODE,
-    ANNUAL_REPRT_CODE,
+    ANNUAL_REPRT_CODE, DART_COMPANY_URL, CORP_DIRECTORY_TTL_SECONDS,
+    CORP_DIRECTORY_RETRY_SECONDS, CORP_PROFILE_TTL_SECONDS,
+    CORP_PROFILE_CACHE_SIZE, CORP_LEGAL_MARKERS, CORP_LISTED_CLASSES, CORP_CANDIDATE_LIMIT,
 )
 
 
@@ -209,101 +218,162 @@ def fetch_dividend_per_share_q(corp_code: str, year: str, quarter: str) -> int |
 
 # ── 회사 코드 조회 ───────────────────────────────────────────────────────────
 
-def _load_corp_xml_root():
-    """corpCode.xml을 로드하고 ElementTree root를 반환합니다."""
-    import os
-    import xml.etree.ElementTree as ET
-    corp_code_path = os.path.join(REPORTS_DIR, "corpCode.xml")
-    if not os.path.exists(corp_code_path):
+_corp_directory_lock = threading.Lock()
+_corp_directory_retry_at = 0.0
+_corp_directory_root: ET.Element | None = None
+_corp_directory_stamp: tuple[str, int, int] | None = None
+
+
+def _load_corp_xml_root() -> ET.Element:
+    """기업 목록을 하루마다 안전하게 갱신하고 일시 장애에는 기존 목록을 사용합니다."""
+    global _corp_directory_retry_at, _corp_directory_root, _corp_directory_stamp
+    path = os.path.join(REPORTS_DIR, 'corpCode.xml')
+    with _corp_directory_lock:
+        root = None
+        try:
+            stat = os.stat(path)
+            stamp = (path, stat.st_mtime_ns, stat.st_size)
+            if _corp_directory_root is not None and _corp_directory_stamp == stamp:
+                root = _corp_directory_root
+            else:
+                root = ET.parse(path).getroot()
+                _corp_directory_root, _corp_directory_stamp = root, stamp
+            fresh = time.time() - stat.st_mtime < CORP_DIRECTORY_TTL_SECONDS
+            if fresh or time.monotonic() < _corp_directory_retry_at:
+                return root
+        except (OSError, ET.ParseError):
+            pass
+        temporary = None
         try:
             content = _dart_get_raw(DART_CORP_CODE_URL, {})
-            with zipfile.ZipFile(io.BytesIO(content)) as z:
-                z.extractall(REPORTS_DIR)
-        except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=500, detail=f"DART 회사 코드 목록 다운로드 실패: {type(e).__name__}")
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                member = next(n for n in archive.namelist()
+                              if n.casefold() == 'corpcode.xml')
+                raw = archive.read(member)
+            updated = ET.fromstring(raw)
+            if not updated.findall('./list'):
+                raise ValueError('empty directory')
+            with tempfile.NamedTemporaryFile(dir=REPORTS_DIR, delete=False) as output:
+                temporary = output.name
+                output.write(raw)
+            os.replace(temporary, path)
+            stat = os.stat(path)
+            _corp_directory_root = updated
+            _corp_directory_stamp = (path, stat.st_mtime_ns, stat.st_size)
+            _corp_directory_retry_at = 0.0
+            return updated
+        except (requests.RequestException, OSError, ValueError, StopIteration,
+                zipfile.BadZipFile, ET.ParseError):
+            _corp_directory_retry_at = time.monotonic() + CORP_DIRECTORY_RETRY_SECONDS
+            if root is not None:
+                return root
+            raise HTTPException(503, 'DART 기업 목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.') from None
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+
+
+def _normalize_company_name(name: str) -> str:
+    """대소문자·공백·법인 접두/접미 표기를 통일하고 실제 상호는 보존합니다."""
+    value = re.sub(r'[\s\u200b-\u200d\ufeff]', '', unicodedata.normalize('NFKC', name)).casefold()
+    for marker in CORP_LEGAL_MARKERS:
+        if value.startswith(marker):
+            value = value[len(marker):]
+        if value.endswith(marker):
+            value = value[:-len(marker)]
+    return value
+
+
+@lru_cache(maxsize=1)
+def _company_records(root: ET.Element) -> list[dict]:
+    """유효한 DART 기업 목록 항목을 공통 검색 형식으로 변환합니다."""
+    records = {}
+    for item in root.findall('.//list'):
+        code = item.findtext('corp_code', '').strip()
+        name = item.findtext('corp_name', '').strip()
+        if code and name:
+            records[code] = {'company_name': name, 'corp_code': code,
+                             'stock_code': item.findtext('stock_code', '').strip() or None,
+                             '_normalized_name': _normalize_company_name(name)}
+    return list(records.values())
+
+
+@lru_cache(maxsize=CORP_PROFILE_CACHE_SIZE)
+def _company_profile(corp_code: str, period: int) -> dict:
+    """동명이인 판별용 기업개황을 제한된 기간 동안 재사용합니다."""
     try:
-        return ET.parse(corp_code_path).getroot()
-    except ET.ParseError as e:
-        raise HTTPException(status_code=500, detail=f"corpCode.xml 파싱 실패: {type(e).__name__}")
+        data = _dart_get(DART_COMPANY_URL, {'corp_code': corp_code})
+    except requests.RequestException:
+        raise HTTPException(503, 'DART 기업개황을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.') from None
+    if data.get('status') != '000' or data.get('corp_cls') not in (*CORP_LISTED_CLASSES, 'E'):
+        raise HTTPException(503, 'DART 기업개황을 확인하지 못했습니다. 잠시 후 다시 시도해주세요.')
+    return data
+
+
+def get_company_info(company_name: str) -> dict:
+    """정식명·표기 변형·종목코드로 기업을 찾고 동명 기업의 현재 상장 여부를 확인합니다."""
+    records = _company_records(_load_corp_xml_root())
+    raw = company_name.strip()
+    query = _normalize_company_name(raw)
+    if not query:
+        raise HTTPException(404, '기업명 또는 6자리 종목코드를 입력해주세요.')
+    if re.fullmatch(r'[0-9]{6}', raw):
+        matches = [r for r in records if r['stock_code'] == raw]
+    else:
+        matches = [r for r in records if r['_normalized_name'] == query]
+        if not matches:
+            matches = [r for r in records if r['stock_code'] and query in r['_normalized_name']]
+            # 부분 일치만으로 여러 다른 기업 중 하나를 추측하지 않습니다.
+            if len(matches) > 1:
+                choices = ', '.join(f"{r['company_name']} ({r['stock_code']})" for r in matches[:CORP_CANDIDATE_LIMIT])
+                raise HTTPException(404, f"'{company_name}'에 해당하는 기업이 여러 곳입니다. 종목코드로 선택해주세요: {choices}")
+    if len(matches) == 1:
+        return {k: v for k, v in matches[0].items() if not k.startswith('_')}
+    if len(matches) > 1:
+        listed = []
+        period = int(time.time() // CORP_PROFILE_TTL_SECONDS)
+        for record in matches:
+            profile = _company_profile(record['corp_code'], period)
+            if profile['corp_cls'] in CORP_LISTED_CLASSES:
+                listed.append({**record, 'stock_code': profile.get('stock_code') or record['stock_code']})
+        if len(listed) == 1:
+            return {k: v for k, v in listed[0].items() if not k.startswith('_')}
+        choices = ', '.join(f"{r['company_name']} ({r['stock_code'] or '비상장'}, 고유번호 {r['corp_code']})"
+                            for r in (listed or matches)[:CORP_CANDIDATE_LIMIT])
+        raise HTTPException(404, f"'{company_name}'의 동명 기업을 구분할 수 없습니다. 종목코드로 선택해주세요: {choices}")
+    raise HTTPException(404, f"'{company_name}' 회사 코드를 찾을 수 없습니다. 정식명 또는 6자리 종목코드로 검색해주세요.")
 
 
 def get_corp_code(company_name: str) -> str:
-    """회사 이름을 기반으로 DART 고유의 회사 코드를 조회합니다.
-
-    매칭 우선순위:
-      1. 완전 일치 (대소문자 구분)
-      2. 완전 일치 (대소문자 무시)
-      3. 상장사 중 부분 일치 (대소문자 무시) — 단 1건일 때만 자동 선택
-    """
-    root = _load_corp_xml_root()
-    query_lower = company_name.lower()
-
-    exact, iexact, partial = None, None, []
-    for item in root.findall('.//list'):
-        name_el = item.find('corp_name')
-        stock_el = item.find('stock_code')
-        if name_el is None:
-            continue
-        name = name_el.text or ''
-        stock = (stock_el.text or '').strip() if stock_el is not None else ''
-        code = item.find('corp_code').text
-
-        if name == company_name:
-            exact = code
-            break
-        if name.lower() == query_lower and iexact is None:
-            iexact = (code, name)
-        if stock and query_lower in name.lower():
-            partial.append((code, name))
-
-    if exact:
-        return exact
-    if iexact:
-        return iexact[0]
-    if len(partial) == 1:
-        return partial[0][0]
-
-    raise HTTPException(status_code=404, detail=f"'{company_name}' 회사 코드를 찾을 수 없음.")
+    """공통 기업 식별 결과에서 DART 고유번호를 반환합니다."""
+    return get_company_info(company_name)['corp_code']
 
 
 async def resolve_corp_code(company_name: str) -> str:
-    """get_corp_code(동기, XML 파싱)를 이벤트 루프를 막지 않고 실행한다."""
+    """기업 조회를 이벤트 루프를 막지 않고 실행합니다."""
     return await asyncio.to_thread(get_corp_code, company_name)
 
 
 def search_similar_companies(query: str, max_results: int = 5) -> list[str]:
-    """쿼리와 유사한 상장 기업명 목록을 반환합니다 (상장사만, stock_code 보유 기준)."""
+    """공백·법인 표기 차이를 반영하여 유사한 상장 기업명을 추천합니다."""
     try:
-        root = _load_corp_xml_root()
-    except Exception:
+        records = _company_records(_load_corp_xml_root())
+    except HTTPException:
         return []
-
-    query_lower = query.lower()
+    normalized = _normalize_company_name(query)
+    if not normalized:
+        return []
     starts_with, contains = [], []
-    for item in root.findall('.//list'):
-        name_el = item.find('corp_name')
-        stock_el = item.find('stock_code')
-        if name_el is None:
+    for record in records:
+        name = record['company_name']
+        candidate = record['_normalized_name']
+        if not record['stock_code'] or candidate == normalized:
             continue
-        name = name_el.text or ''
-        stock = (stock_el.text or '').strip() if stock_el is not None else ''
-        if not stock:
-            continue
-        if name.lower() == query_lower:
-            continue
-        name_lower = name.lower()
-        if name_lower.startswith(query_lower):
+        if candidate.startswith(normalized):
             starts_with.append(name)
-        elif query_lower in name_lower:
+        elif normalized in candidate:
             contains.append(name)
-
-    results = starts_with + contains
-    seen, unique = set(), []
-    for r in results:
-        if r not in seen:
-            seen.add(r)
-            unique.append(r)
-    return unique[:max_results]
+    return list(dict.fromkeys(starts_with + contains))[:max_results]
 
 
 # ── 사업의 내용 추출 ─────────────────────────────────────────────────────────
