@@ -801,7 +801,7 @@ async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
     user_msg = update.message.text.strip()
 
     typing_msg = await update.message.reply_text(
-        "⏳ <i>답변 생성 중...</i>", parse_mode=ParseMode.HTML
+        "⏳ <i>공시 근거를 찾고 답변을 작성하고 있습니다. 첫 질문은 색인 준비로 시간이 더 걸릴 수 있습니다.</i>", parse_mode=ParseMode.HTML
     )
 
     payload = {

@@ -129,6 +129,8 @@ dividend_cache      = DiskCache(os.path.join(_CACHE_DIR, "dividend"),      max_s
 financials_cache    = DiskCache(os.path.join(_CACHE_DIR, "financials"),    max_size=20)
 dividend_json_cache = DiskCache(os.path.join(_CACHE_DIR, "dividend_json"), max_size=20)
 business_cache      = DiskCache(os.path.join(_CACHE_DIR, "business"),      max_size=20)
+segment_cache = DiskCache(os.path.join(_CACHE_DIR, 'segments'), max_size=20)
+rag_manifest_cache = DiskCache(os.path.join(_CACHE_DIR, 'report_manifests'), max_size=20)
 quarterly_financials_cache = DiskCache(os.path.join(_CACHE_DIR, "quarterly_financials"), max_size=20)
 quarterly_profit_cache = DiskCache(os.path.join(_CACHE_DIR, "quarterly_profit"), max_size=20)
 quarterly_dividend_cache   = DiskCache(os.path.join(_CACHE_DIR, "quarterly_dividend"),   max_size=20)

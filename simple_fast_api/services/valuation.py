@@ -1,26 +1,22 @@
 """주가 기반 밸류에이션 지표 계산 모듈."""
-import xml.etree.ElementTree as ET
 import yfinance as yf
-from config import REPORTS_DIR, DART_API_KEY, DART_CORP_CODE_URL, YEAR_RANGE
-from services.dart import fetch_dart_financials, get_corp_code
+from fastapi import HTTPException
+from config import YEAR_RANGE
+from services.dart import fetch_dart_financials, get_corp_code, _load_corp_xml_root
 
 
 def get_stock_code(company_name: str) -> str | None:
-    """corpCode.xml에서 종목코드(stock_code)를 반환합니다."""
-    import os, zipfile, requests, io
-
-    corp_code_path = os.path.join(REPORTS_DIR, 'CORPCODE.xml')
-    if not os.path.exists(corp_code_path):
-        res = requests.get(DART_CORP_CODE_URL, params={'crtfc_key': DART_API_KEY}, timeout=30)
-        res.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(res.content)) as z:
-            z.extractall(REPORTS_DIR)
-
-    root = ET.parse(corp_code_path).getroot()
+    """공통 기업 검색으로 확정한 회사의 종목코드를 반환합니다."""
+    try:
+        corp_code = get_corp_code(company_name)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+    root = _load_corp_xml_root()
     for item in root.findall('.//list'):
-        if item.find('corp_name').text == company_name:
-            code = item.find('stock_code').text
-            return code.strip() if code and code.strip() else None
+        if item.findtext('corp_code') == corp_code:
+            return item.findtext('stock_code', '').strip() or None
     return None
 
 
@@ -40,7 +36,6 @@ def fetch_valuation(company_name: str, financials: list[dict] | None = None) -> 
     - financials   : 최근 3개년 지표 이력 (per, pbr, psr)
     """
     from datetime import datetime
-    from fastapi import HTTPException
 
     # 1. 종목코드 조회
     stock_code = get_stock_code(company_name)
