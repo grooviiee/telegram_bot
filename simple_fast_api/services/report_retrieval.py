@@ -6,6 +6,8 @@ import json
 import re
 import sqlite3
 import zipfile
+import time
+from functools import lru_cache
 from contextlib import contextmanager
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -15,19 +17,22 @@ from pathlib import Path
 from fastapi import HTTPException
 from lxml import html
 
-from cache import rag_manifest_cache
+from cache import rag_manifest_cache, rag_answer_cache
 from config import (DART_LIST_URL, DART_DOCUMENT_URL, DART_VIEWER_URL, YEAR_RANGE,
                     RAG_DB_PATH, RAG_INDEX_VERSION, RAG_CHUNK_CHARS, RAG_CHUNK_OVERLAP,
                     RAG_EVIDENCE_CHARS, RAG_PASSAGE_COUNT, RAG_MAX_REPORTS, RAG_QUERY_TERMS, RAG_CANDIDATE_COUNT, RAG_HEADING_FACETS,
                     RAG_DOCUMENT_TIMEOUT, RAG_MAX_DOCUMENT_BYTES, RAG_MAX_INDEX_CHARS,
                     RAG_DB_TIMEOUT, RAG_QUERY_SYNONYMS, RAG_STOP_WORDS,
                     RAG_SYSTEM_RULES, RAG_OUTPUT_TOKENS, RAG_RETRY_TOKENS, OLLAMA_MAX_INPUT_CHARS,
-                    OLLAMA_SYSTEM_RULES)
+                    OLLAMA_SYSTEM_RULES, AI_PROVIDER, GEMINI_MODEL, OLLAMA_MODEL,
+                    OLLAMA_NUM_CTX, OLLAMA_PROMPT_VERSION, RAG_ANSWER_CACHE_VERSION,
+                    RAG_ANSWER_VARIANTS_PER_COMPANY, RAG_SEARCH_CACHE_SIZE)
 from services.dart import _dart_get, _dart_get_raw
 from services.dart import resolve_corp_code
 from utils import call_gemini
 
 _index_slots = asyncio.Semaphore(1)
+_pending_answers: dict[str, asyncio.Task] = {}
 
 
 def _normalize(text: str) -> str:
@@ -350,6 +355,12 @@ def _search(corp_code: str, receipt: str, query: str) -> list[dict]:
     return selected
 
 
+@lru_cache(maxsize=RAG_SEARCH_CACHE_SIZE)
+def _cached_search(corp_code: str, receipt: str, query: str, revision: str) -> list[dict]:
+    """같은 공시 색인 판본과 검색어의 검색 결과를 제한된 메모리에서 재사용합니다."""
+    return _search(corp_code, receipt, query)
+
+
 async def retrieve_report_evidence(company: str, corp_code: str, message: str,
                                    history: list[dict] | None = None) -> dict:
     """회사·공시·기간을 격리하여 전체 색인에서 관련 본문과 표를 검색합니다."""
@@ -389,7 +400,8 @@ async def retrieve_report_evidence(company: str, corp_code: str, message: str,
         for report in chosen:
             async with _index_slots:
                 metadata, cached = await asyncio.to_thread(_index_report, corp_code, report)
-            hits = await asyncio.to_thread(_search, corp_code, report['rcept_no'], query.replace(company, ''))
+            hits = await asyncio.to_thread(_cached_search, corp_code, report['rcept_no'],
+                                           query.replace(company, ''), metadata.get('retrieved_at', ''))
             metadatas.append(metadata)
             cache_flags.append(cached)
             groups.append([{**h, 'fiscal_year': metadata['fiscal_year'], 'receipt_no': metadata['receipt_no']} for h in hits])
@@ -496,30 +508,81 @@ def _source_footer(result: dict, sources: list[dict]) -> str:
     return '\n'.join(lines)
 
 
-async def answer_from_report(company: str, corp_code: str, message: str, history: list[dict]) -> dict:
-    """질문 관련 공시 근거로 답하고 무근거 인용·새 숫자는 원문 발췌로 대체합니다."""
-    result = await retrieve_report_evidence(company, corp_code, message, history)
-    query = message
-    # 후속 질문의 대상을 명시하되 이전 모델 답변을 사실 근거로 전달하지 않습니다.
-    if result['search_query'] != message:
-        query = result['search_query']
-    prompt, sources = evidence_prompt(result, query)
-    if not sources:
-        return {'answer': '질문에 맞는 공시 근거를 찾지 못했습니다. 사업·제품·위험 등 확인할 주제를 구체적으로 입력해주세요.',
-                'ai_used': False, 'cached': result['cached'], 'evidence': [], 'retrieval': result['report']}
+async def _generate_grounded_answer(query: str, prompt: str, sources: list[dict], report: dict) -> tuple[str, bool]:
     answer = await call_gemini(query, system_instruction=prompt,
                                generation_config={'temperature': .15, 'maxOutputTokens': RAG_OUTPUT_TOKENS})
-    valid = not answer.startswith('(AI 응답 생성 실패)') and _supported_answer(answer, sources, result['report'])
+    valid = not answer.startswith('(AI 응답 생성 실패)') and _supported_answer(answer, sources, report)
     if not valid and not answer.startswith('(AI 응답 생성 실패)'):
         answer = await call_gemini(query, system_instruction=prompt +
             '\n검증 요청: 답변에서 근거 번호 외의 숫자와 약어 풀이를 생략하세요. 원문의 사실만 한국어 두 단락으로 설명하고 각 문장에 [R1] 등 정확한 근거 번호를 붙이세요.',
             generation_config={'temperature': .1, 'maxOutputTokens': RAG_RETRY_TOKENS})
-        valid = not answer.startswith('(AI 응답 생성 실패)') and _supported_answer(answer, sources, result['report'])
+        valid = not answer.startswith('(AI 응답 생성 실패)') and _supported_answer(answer, sources, report)
+    return answer, valid
+
+
+async def _reuse_or_generate(company: str, fingerprint: str, query: str, prompt: str,
+                             sources: list[dict], report: dict) -> tuple[str, bool, bool]:
+    cached = await rag_answer_cache.get(company)
+    entry = cached.get('entries', {}).get(fingerprint) if isinstance(cached, dict) else None
+    if isinstance(entry, str) and _supported_answer(entry, sources, report):
+        return entry, True, True
+    answer, valid = await _generate_grounded_answer(query, prompt, sources, report)
+    if valid:
+        async with rag_answer_cache.lock(company):
+            latest = await rag_answer_cache.get(company)
+            entries = dict(latest.get('entries', {})) if isinstance(latest, dict) else {}
+            entries.pop(fingerprint, None)
+            entries[fingerprint] = answer
+            while len(entries) > RAG_ANSWER_VARIANTS_PER_COMPANY:
+                entries.pop(next(iter(entries)))
+            await rag_answer_cache.set(company, {'entries': entries})
+    return answer, valid, False
+
+
+def _forget_answer(key: str, task: asyncio.Task) -> None:
+    if _pending_answers.get(key) is task:
+        _pending_answers.pop(key, None)
+    if not task.cancelled():
+        task.exception()  # 모든 대기 요청이 취소돼도 예외가 미처리 상태로 남지 않게 합니다.
+
+
+async def answer_from_report(company: str, corp_code: str, message: str, history: list[dict]) -> dict:
+    """동일 근거·질문·대화의 검증된 답변을 재사용하고 동시 중복 생성은 합칩니다."""
+    started = time.perf_counter()
+    result = await retrieve_report_evidence(company, corp_code, message, history)
+    retrieved = time.perf_counter()
+    query = result['search_query'] if result['search_query'] != message else message
+    prompt, sources = evidence_prompt(result, query)
+    if not sources:
+        return {'answer': '질문에 맞는 공시 근거를 찾지 못했습니다. 사업·제품·위험 등 확인할 주제를 구체적으로 입력해주세요.',
+                'ai_used': False, 'cached': result['cached'], 'answer_cached': False,
+                'evidence': [], 'retrieval': result['report']}
+    fingerprint = hashlib.sha256(json.dumps({
+        'corp': corp_code, 'query': query, 'history': history, 'prompt': prompt, 'sources': sources,
+        'receipts': [r.get('receipt_no') for r in result.get('reports', [result['report']])],
+        'provider': AI_PROVIDER, 'model': OLLAMA_MODEL if AI_PROVIDER == 'ollama' else GEMINI_MODEL,
+        'context': OLLAMA_NUM_CTX, 'input_limit': OLLAMA_MAX_INPUT_CHARS,
+        'system': OLLAMA_SYSTEM_RULES, 'local_version': OLLAMA_PROMPT_VERSION,
+        'output': [RAG_OUTPUT_TOKENS, RAG_RETRY_TOKENS], 'version': RAG_ANSWER_CACHE_VERSION,
+    }, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    key = json.dumps([company, fingerprint], ensure_ascii=False)
+    task = _pending_answers.get(key)
+    shared = task is not None
+    if task is None:
+        task = asyncio.create_task(_reuse_or_generate(company, fingerprint, query, prompt, sources, result['report']))
+        _pending_answers[key] = task
+        task.add_done_callback(lambda done: _forget_answer(key, done))
+    answer, valid, answer_cached = await asyncio.shield(task)
     if not valid:
         answer = '질문과 관련해 확인된 공시 원문입니다. 생성 답변 대신 근거를 직접 표시합니다.\n\n' + '\n\n'.join(
             f"[{s['id']}] {s['heading']}\n{s['excerpt']}" for s in sources)
+    finished = time.perf_counter()
     return {'answer': answer + _source_footer(result, sources), 'ai_used': valid,
-            'cached': result['cached'], 'evidence': [{k: s[k] for k in ('id', 'heading', 'kind', 'filename', 'ordinal', 'excerpt')} for s in sources],
+            'cached': result['cached'], 'answer_cached': answer_cached, 'response_shared': shared,
+            'timings_ms': {'retrieval': round((retrieved - started) * 1000, 2),
+                           'answer': round((finished - retrieved) * 1000, 2),
+                           'total': round((finished - started) * 1000, 2)},
+            'evidence': [{k: s[k] for k in ('id', 'heading', 'kind', 'filename', 'ordinal', 'excerpt')} for s in sources],
             'retrieval': result['report']}
 
 
@@ -533,8 +596,8 @@ async def report_index_status() -> dict:
     return await asyncio.to_thread(read)
 
 
-async def annual_comparison_documents(company: str, corp_code: str) -> list[dict]:
-    """최근 결산연도와 직전 연도의 주본문을 동일한 색인에서 읽습니다."""
+async def annual_comparison_reports(company: str, corp_code: str) -> list[dict]:
+    """최신 공시 목록에서 연속된 동일 결산월의 두 보고서 식별자를 고릅니다."""
     async def load() -> dict:
         try:
             return await asyncio.to_thread(_listing, corp_code)
@@ -550,6 +613,13 @@ async def annual_comparison_documents(company: str, corp_code: str) -> list[dict
     if previous['fiscal_month'] != latest['fiscal_month']:
         raise HTTPException(422, '두 보고서의 결산월이 달라 같은 기준으로 비교할 수 없습니다.')
 
+    return [previous, latest]
+
+
+async def annual_comparison_documents(company: str, corp_code: str,
+                                       reports: list[dict] | None = None) -> list[dict]:
+    """선택한 두 공시의 주본문을 동일한 색인에서 읽습니다."""
+    chosen = reports if reports is not None else await annual_comparison_reports(company, corp_code)
     def read(metadata: dict) -> dict:
         with _connect() as connection:
             rows = [dict(r) for r in connection.execute(
@@ -565,7 +635,7 @@ async def annual_comparison_documents(company: str, corp_code: str) -> list[dict
 
     documents = []
     try:
-        for report in (previous, latest):
+        for report in chosen:
             async with _index_slots:
                 metadata, _ = await asyncio.to_thread(_index_report, corp_code, report)
                 documents.append(await asyncio.to_thread(read, metadata))
@@ -596,4 +666,6 @@ async def clear_report_index(company: str | None = None) -> bool:
                 connection.execute('DELETE FROM chunks')
             return deleted > 0
     async with _index_slots:
-        return await asyncio.to_thread(clear)
+        result = await asyncio.to_thread(clear)
+        _cached_search.cache_clear()
+        return result

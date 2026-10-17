@@ -1,5 +1,6 @@
 """공시 전체 색인·회사/기간 격리·검색 인용·안전한 답변 폴백을 검증합니다."""
 import asyncio
+import copy
 import io
 import json
 import tempfile
@@ -181,7 +182,26 @@ class IndexTests(unittest.TestCase):
         self.assertTrue(rag._search('123', REPORT['rcept_no'], '냉장고'))
 
 
+class MemoryAnswerCache:
+    def __init__(self):
+        self.values = {}
+        self.locks = {}
+
+    def lock(self, key):
+        return self.locks.setdefault(key, asyncio.Lock())
+
+    async def get(self, key):
+        return copy.deepcopy(self.values.get(key))
+
+    async def set(self, key, value):
+        self.values[key] = copy.deepcopy(value)
+
+
 class AnswerTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch.object(rag, 'rag_answer_cache', MemoryAnswerCache()).start()
+        rag._cached_search.cache_clear()
     async def test_cited_answer_and_source_location(self):
         with patch.object(rag, 'retrieve_report_evidence', AsyncMock(return_value=result())), \
              patch.object(rag, 'call_gemini', AsyncMock(return_value='냉장고를 제조하며 원재료 위험이 있습니다. [R1]')):

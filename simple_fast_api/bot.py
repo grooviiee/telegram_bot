@@ -23,7 +23,7 @@ from telegram.error import Forbidden
 import database
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
                     TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT,
-                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS, CHANGES_HTTP_TIMEOUT, TELEGRAM_MSG_LIMIT)
+                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS, CHANGES_HTTP_TIMEOUT, TELEGRAM_MSG_LIMIT, AI_PROVIDER)
 from services.changes import format_change_blocks
 from services import github_trending
 from utils import fmt_krw
@@ -841,10 +841,17 @@ async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
         await msg.edit_text(f"❌ {_e(data.get('detail', '기업을 찾을 수 없습니다.'))}", parse_mode=ParseMode.HTML)
         return ConversationHandler.END
 
+    previous = ctx.user_data.get('chat_task')
+    if previous and not previous.done():
+        previous.cancel()
+        await asyncio.gather(previous, return_exceptions=True)
+    ctx.user_data.pop('chat_task', None)
     resolved = data.get("company_name", company)
     ctx.user_data["chat_company"] = resolved
     ctx.user_data["chat_company_query"] = data.get('stock_code') or company
     ctx.user_data["chat_history"] = []
+    if AI_PROVIDER == 'ollama':
+        ctx.application.create_task(_post('/ai/prepare', {}), update=update)
 
     await msg.edit_text(
         f"💬 <b>{_e(resolved)} AI 상담</b>\n\n"
@@ -857,43 +864,55 @@ async def cmd_chat_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def handle_chat_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """CHAT_ACTIVE 상태에서 사용자 메시지 처리."""
-    company = ctx.user_data.get("chat_company", "")
-    company_query = ctx.user_data.get('chat_company_query', company)
-    history = ctx.user_data.get("chat_history", [])
-    user_msg = update.message.text.strip()
-
-    typing_msg = await update.message.reply_text(
-        "⏳ <i>공시 근거를 찾고 답변을 작성하고 있습니다. 첫 질문은 색인 준비로 시간이 더 걸릴 수 있습니다.</i>", parse_mode=ParseMode.HTML
-    )
-
-    payload = {
-        "message": user_msg,
-        "history": history,
-        "mode": "buffett",
-    }
-    data, status = await _post(f"/chat/{company_query}", payload)
-
-    if status != 200:
-        await typing_msg.edit_text(
-            f"❌ {_e(data.get('detail', '오류가 발생했습니다.'))}", parse_mode=ParseMode.HTML
-        )
+    """상담 이력을 보존하며 답변 생성은 백그라운드에서 처리합니다."""
+    previous = ctx.user_data.get('chat_task')
+    if previous and not previous.done():
+        await update.message.reply_text('앞선 질문에 답변하는 중입니다. 완료 후 다음 질문을 입력해주세요.')
         return CHAT_ACTIVE
+    company = ctx.user_data.get('chat_company', '')
+    company_query = ctx.user_data.get('chat_company_query', company)
+    history = list(ctx.user_data.get('chat_history', []))
+    user_msg = update.message.text.strip()
+    typing_msg = await update.message.reply_text(
+        '⏳ <i>공시 근거를 찾고 답변을 작성하고 있습니다. 첫 질문은 색인 준비로 시간이 더 걸릴 수 있습니다.</i>',
+        parse_mode=ParseMode.HTML)
 
-    answer = data.get("answer", "")
+    async def respond() -> None:
+        try:
+            data, status = await _post(f'/chat/{company_query}', {
+                'message': user_msg, 'history': history, 'mode': 'buffett'})
+            if status != 200:
+                await typing_msg.edit_text(f"❌ {_e(data.get('detail', '오류가 발생했습니다.'))}", parse_mode=ParseMode.HTML)
+                return
+            answer = data.get('answer', '')
+            ctx.user_data['chat_history'] = [*history, {'role': 'user', 'text': user_msg},
+                                            {'role': 'model', 'text': answer}][-30:]
+            await typing_msg.delete()
+            await _send_long(update, _md_to_html(answer))
+        except asyncio.CancelledError:
+            try:
+                await typing_msg.edit_text('답변 대기가 종료되었습니다.')
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            logging.getLogger(__name__).warning('상담 응답 실패 (%s)', type(exc).__name__)
+            await typing_msg.edit_text('답변을 불러오지 못했습니다. 잠시 후 다시 질문해주세요.')
+        finally:
+            if ctx.user_data.get('chat_task') is asyncio.current_task():
+                ctx.user_data.pop('chat_task', None)
 
-    # 대화 이력 갱신 (마지막 10턴만 유지)
-    history.append({"role": "user",  "text": user_msg})
-    history.append({"role": "model", "text": answer})
-    ctx.user_data["chat_history"] = history[-30:]
-
-    await typing_msg.delete()
-    await _send_long(update, _md_to_html(answer))
+    ctx.user_data['chat_task'] = ctx.application.create_task(respond(), update=update)
     return CHAT_ACTIVE
 
 
 async def cmd_chat_end(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     """AI 상담 종료."""
+    previous = ctx.user_data.get('chat_task')
+    if previous and not previous.done():
+        previous.cancel()
+        await asyncio.gather(previous, return_exceptions=True)
+    ctx.user_data.pop('chat_task', None)
     company = ctx.user_data.pop("chat_company", "")
     ctx.user_data.pop('chat_company_query', None)
     ctx.user_data.pop("chat_history", None)

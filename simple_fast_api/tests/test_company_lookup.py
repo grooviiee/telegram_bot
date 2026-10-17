@@ -1,5 +1,6 @@
 """기업명 검색과 밸류에이션의 종목코드 해석 일관성을 검증합니다."""
 import unittest
+import asyncio
 import io
 import os
 import tempfile
@@ -200,6 +201,9 @@ class DirectoryRefreshTests(unittest.TestCase):
 
 
 class CompanyBotTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch.object(bot, 'AI_PROVIDER', 'gemini').start()
     async def test_identity_endpoint_does_not_require_financials(self):
         company = {'company_name': '신성이엔지', 'corp_code': '00136271', 'stock_code': '011930'}
         with patch.object(data, 'get_company_info', return_value=company):
@@ -220,12 +224,14 @@ class CompanyBotTests(unittest.IsolatedAsyncioTestCase):
         pending = SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock())
         message = SimpleNamespace(reply_text=AsyncMock(return_value=pending), text='사업 내용을 설명해줘')
         context = SimpleNamespace(args=['104110'], user_data={})
+        context.application = SimpleNamespace(create_task=lambda coro, **kwargs: asyncio.create_task(coro))
         update = SimpleNamespace(message=message)
         with (patch.object(bot, '_get', AsyncMock(return_value=({'company_name': '신성이엔지', 'stock_code': '104110'}, 200))),
               patch.object(bot, '_post', AsyncMock(return_value=({'answer': '해당 법인 근거'}, 200))) as post,
               patch.object(bot, '_send_long', AsyncMock())):
             await bot.cmd_chat_start(update, context)
             await bot.handle_chat_message(update, context)
+            await context.user_data['chat_task']
         self.assertEqual(post.call_args.args[0], '/chat/104110')
         await bot.cmd_chat_end(update, context)
         self.assertNotIn('chat_company_query', context.user_data)
