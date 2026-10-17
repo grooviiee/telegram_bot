@@ -1,5 +1,6 @@
 """FastAPI 애플리케이션 엔트리포인트."""
 import os
+import asyncio
 import uvicorn
 from contextlib import asynccontextmanager
 
@@ -10,11 +11,12 @@ from apscheduler.triggers.cron import CronTrigger
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
-from config import (DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN,
+from config import (DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, AI_PROVIDER,
                     TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE, TRENDING_RETRY_MINUTES, TRENDING_TIMEZONE)
 import database
 import bot as telegram_bot
 from services.cache_warmup import warm_popular_companies
+from services.local_ai import preload_ollama, close_preload
 from routes.data import router as data_router
 from routes.ai import router as ai_router
 from routes.legacy import router as legacy_router
@@ -38,6 +40,7 @@ async def lifespan(app: FastAPI):
     # Startup
     await database.init_db()
     app.state.bot_app = bot_app  # system 라우트에서 참조
+    warmup_task = asyncio.create_task(preload_ollama()) if AI_PROVIDER == 'ollama' else None
 
     if bot_app:
         await bot_app.initialize()
@@ -94,6 +97,10 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown
+    if warmup_task:
+        warmup_task.cancel()
+        await asyncio.gather(warmup_task, return_exceptions=True)
+        await close_preload()
     if scheduler.running:
         scheduler.shutdown(wait=False)
     if bot_app:

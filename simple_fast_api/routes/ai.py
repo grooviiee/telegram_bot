@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from utils import call_gemini
-from services.local_ai import ollama_status
+from services.local_ai import ollama_status, preload_ollama
 from services.report_retrieval import answer_from_report
 from services.changes import annual_changes_data
 from services.dart import get_company_info
@@ -55,6 +55,14 @@ async def ai_status() -> dict:
     if AI_PROVIDER == 'ollama':
         return await ollama_status()
     return {'provider': AI_PROVIDER, 'model': GEMINI_MODEL, 'available': bool(GEMINI_API_KEY)}
+
+
+@router.post('/ai/prepare')
+async def prepare_ai() -> dict:
+    """생성 요청 없이 로컬 모델을 준비하고 준비 실패는 조회 기능에 전파하지 않습니다."""
+    if AI_PROVIDER != 'ollama':
+        return {'provider': AI_PROVIDER, 'prepared': False}
+    return {'provider': AI_PROVIDER, 'prepared': await preload_ollama()}
 
 
 @router.post('/ask')

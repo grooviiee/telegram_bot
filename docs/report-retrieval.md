@@ -35,7 +35,8 @@
 키워드 검색이므로 질문을 사업·제품·사업부 등으로 구체화하면 더 잘 찾을 수 있습니다.
 
 `GET /evidence/{company_name}?query=...`는 모델 호출 없이 검색 근거를 반환합니다.
-`cached`는 원문 색인 재사용 여부이며 생성 답변 캐시를 뜻하지 않습니다.
+`cached`는 원문 색인 재사용 여부입니다. `answer_cached`는 동일 질문·대화·근거의
+검증 답변 재사용 여부이며 자세한 조건은 [응답 속도 개선](response-performance.md)을 참고하세요.
 `GET /cache/status`의 `report_search`에서 색인 수를 확인하고,
 `DELETE /cache/clear?company_name=...`로 회사별 캐시·색인을 지울 수 있습니다.
 색인은 `simple_fast_api/.cache/report_search.sqlite3`에 저장되며 커밋하지 않습니다.

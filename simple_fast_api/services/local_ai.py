@@ -11,10 +11,11 @@ from async_timeout import timeout
 from config import (OLLAMA_BASE_URL, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_NUM_BATCH,
                     OLLAMA_MAX_INPUT_CHARS, OLLAMA_MAX_OUTPUT_TOKENS,
                     OLLAMA_MAX_TOOL_ROUNDS, OLLAMA_REQUEST_TIMEOUT,
-                    OLLAMA_KEEP_ALIVE, OLLAMA_SYSTEM_RULES)
+                    OLLAMA_KEEP_ALIVE, OLLAMA_SYSTEM_RULES, OLLAMA_PRELOAD_TIMEOUT)
 
 FAILURE = '(AI 응답 생성 실패)'
 _inference_slot = asyncio.Semaphore(1)
+_preload_task: asyncio.Task | None = None
 
 
 def _validate_local_endpoint() -> None:
@@ -161,3 +162,43 @@ async def ollama_status() -> dict:
     except Exception:
         return {'provider': 'ollama', 'model': OLLAMA_MODEL, 'available': False,
                 'installed': False, 'loaded': False, 'gpu_bytes': 0, 'model_bytes': 0}
+
+
+async def _preload_model() -> bool:
+    try:
+        _validate_local_endpoint()
+        async with timeout(OLLAMA_PRELOAD_TIMEOUT):
+            async with _inference_slot:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=OLLAMA_PRELOAD_TIMEOUT)) as session:
+                    async with session.get(f'{OLLAMA_BASE_URL}/api/ps') as response:
+                        response.raise_for_status()
+                        state = await response.json()
+                    if any(model.get('name') == OLLAMA_MODEL for model in state.get('models', [])):
+                        return True
+                    async with session.post(f'{OLLAMA_BASE_URL}/api/generate', json={
+                        'model': OLLAMA_MODEL, 'stream': False, 'keep_alive': OLLAMA_KEEP_ALIVE,
+                        'options': {'num_ctx': OLLAMA_NUM_CTX, 'num_batch': OLLAMA_NUM_BATCH, 'num_gpu': 99},
+                    }) as response:
+                        response.raise_for_status()
+                        result = await response.json()
+                        return result.get('done') is True
+    except Exception as exc:
+        logging.getLogger(__name__).info('로컬 모델 사전 준비 생략 (%s)', type(exc).__name__)
+        return False
+
+
+async def preload_ollama() -> bool:
+    """출력 토큰 없이 모델만 준비하며 중복 준비 요청을 하나로 합칩니다."""
+    global _preload_task
+    if _preload_task is None or _preload_task.done():
+        _preload_task = asyncio.create_task(_preload_model())
+    return await asyncio.shield(_preload_task)
+
+
+async def close_preload() -> None:
+    """애플리케이션 종료 시 진행 중인 모델 준비 작업을 정리합니다."""
+    global _preload_task
+    if _preload_task is not None:
+        _preload_task.cancel()
+        await asyncio.gather(_preload_task, return_exceptions=True)
+        _preload_task = None

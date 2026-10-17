@@ -13,7 +13,7 @@ from config import (RAG_INDEX_VERSION, RAG_CHUNK_OVERLAP,
                     CHANGES_MAX_SECTION_CHARS, CHANGES_MAX_SENTENCE_CHARS,
                     CHANGES_MAX_SIMILARITY, CHANGES_QUOTE_CHARS,
                     CHANGES_PHRASE_CHARS, CHANGES_MIN_EDIT_LETTERS)
-from services.report_retrieval import annual_comparison_documents
+from services.report_retrieval import annual_comparison_documents, annual_comparison_reports
 
 
 def _heading_key(text: str) -> str:
@@ -199,15 +199,16 @@ def changed_phrases(sources: list[dict]) -> dict[str, str]:
 
 async def annual_changes_data(company: str, corp_code: str, display_name: str) -> dict:
     """수정 공시·비교 버전을 확인해 두 해의 서술 변경 결과를 캐시합니다."""
-    documents = await annual_comparison_documents(company, corp_code)
-    reports = [d['report'] for d in documents]
+    chosen = await annual_comparison_reports(company, corp_code)
     fingerprint = hashlib.sha256(json.dumps({'corp': corp_code,
-        'receipts': [r['receipt_no'] for r in reports], 'version': CHANGES_VERSION,
+        'receipts': [r['rcept_no'] for r in chosen], 'version': CHANGES_VERSION,
         'index_version': RAG_INDEX_VERSION}, sort_keys=True).encode()).hexdigest()
     async with changes_cache.lock(company):
         cached = await changes_cache.get(company)
         if cached and cached.get('fingerprint') == fingerprint:
             return {**cached['result'], 'cached': True}
+        documents = await annual_comparison_documents(company, corp_code, reports=chosen)
+        reports = [d['report'] for d in documents]
         comparison = await asyncio.to_thread(compare_documents, documents)
         for change in comparison['changes']:
             phrases = changed_phrases(change['evidence'])
