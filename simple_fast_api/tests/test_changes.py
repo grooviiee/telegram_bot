@@ -188,6 +188,8 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patch.stopall)
         patch.object(changes, 'changes_cache', self.cache).start()
         patch.object(changes, 'annual_comparison_documents', AsyncMock(return_value=self.docs)).start()
+        patch.object(changes, 'annual_comparison_reports', AsyncMock(side_effect=lambda *args: [
+            {**d['report'], 'rcept_no': d['report']['receipt_no']} for d in self.docs])).start()
 
     async def test_grounded_comparison_is_cached_without_any_model_call(self):
         with patch('utils.call_gemini', AsyncMock()) as model:
@@ -209,6 +211,11 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(fresh['cached'])
         self.assertEqual(fresh['reports'][1]['receipt_no'], '20260706000276')
 
+    async def test_cached_changes_skip_loading_full_documents(self):
+        await changes.annual_changes_data('회사', '123', '회사')
+        with patch.object(changes, 'annual_comparison_documents', AsyncMock(side_effect=AssertionError('cache hit must skip full documents'))):
+            self.assertTrue((await changes.annual_changes_data('회사', '123', '회사'))['cached'])
+
     async def test_different_corporation_does_not_reuse_same_name_cache(self):
         await changes.annual_changes_data('회사', '123', '회사')
         fresh = await changes.annual_changes_data('회사', '456', '회사')
@@ -217,7 +224,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unavailable_report_is_not_replaced_by_cached_old_comparison(self):
         await changes.annual_changes_data('회사', '123', '회사')
-        with patch.object(changes, 'annual_comparison_documents', AsyncMock(side_effect=HTTPException(404, '보고서 없음'))):
+        with patch.object(changes, 'annual_comparison_reports', AsyncMock(side_effect=HTTPException(404, '보고서 없음'))):
             with self.assertRaises(HTTPException) as caught:
                 await changes.annual_changes_data('회사', '123', '회사')
         self.assertEqual(caught.exception.status_code, 404)
