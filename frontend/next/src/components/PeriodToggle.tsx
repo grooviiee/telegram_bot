@@ -8,10 +8,11 @@ interface PeriodToggleProps {
 
 export function PeriodToggle({ value, onChange, disabled = false }: PeriodToggleProps) {
   return (
-    <div className={`inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
+    <div role="group" aria-label="조회 기간" className={`inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm font-medium ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
       {(['annual', 'quarterly'] as const).map((p) => (
         <button
           key={p}
+          aria-pressed={value === p}
           onClick={() => onChange(p)}
           disabled={disabled}
           className={`px-4 py-1.5 transition-colors ${

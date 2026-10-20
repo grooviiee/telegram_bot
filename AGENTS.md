@@ -40,9 +40,11 @@ npm run build                             # 프로덕션 빌드
 npm run lint                              # ESLint 검사 — PR 전 필수
 ```
 
-> **테스트 프레임워크는 아직 없습니다.** 검증은 서버를 띄우고 실제 엔드포인트를
-> 호출해 확인합니다 (예: `curl http://127.0.0.1:8000/financials/삼성전자`).
-> QA는 `.claude/agents/tester.md` 서브에이전트가 담당합니다.
+> 백엔드 회귀 테스트는 `simple_fast_api/`에서 `python -m unittest discover -s tests`로 실행합니다.
+> 웹 UX는 웹 서버 실행 후 `frontend/next/`에서 `npm run test:ux`로 검증합니다.
+> 최초 실행 시 `npx playwright install chromium`이 필요합니다. API 응답을 대체하므로 키가 필요하지 않습니다.
+> 실제 API 통합 검증은 서버를 띄우고 엔드포인트를 호출합니다
+> (예: `curl http://127.0.0.1:8000/financials/삼성전자`). QA는 `.claude/agents/tester.md`가 담당합니다.
 
 ## 환경변수
 

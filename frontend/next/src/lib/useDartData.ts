@@ -26,10 +26,15 @@ export function useDartData<T>(
   initialCompany?: string,
   onSearched?: () => void,
 ): UseDartDataResult<T> {
-  const { buildPath, extractData, timeout = 300_000, autoFetch = true } = options;
+  const { autoFetch = true } = options;
 
   const requestId = useRef(0);
   const inFlight = useRef<string | null>(null);
+  const controller = useRef<AbortController | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const onSearchedRef = useRef(onSearched);
+  onSearchedRef.current = onSearched;
   const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -38,47 +43,68 @@ export function useDartData<T>(
 
   const fetchData = useCallback(async (nameOverride?: string): Promise<void> => {
     const name = (nameOverride ?? companyName).trim();
-    if (!name) { setMessage('회사명을 입력해주세요.'); return; }
+    if (!name) { setMessage('오류: 회사명을 입력해주세요.'); return; }
     if (inFlight.current === name) return;
+    controller.current?.abort();
+    const abort = new AbortController();
+    controller.current = abort;
+    const { buildPath, extractData, extractCompanyName, timeout = 300_000 } = optionsRef.current;
+    const timer = setTimeout(() => abort.abort(), timeout);
     inFlight.current = name;
     const id = ++requestId.current;
+    setCompanyName(name);
     setLoading(true); setMessage(''); setData(null); setResolvedName('');
     try {
       const res = await fetch(
         `${API_BASE}${buildPath(encodeURIComponent(name))}`,
-        { signal: AbortSignal.timeout(timeout) }
+        { signal: abort.signal }
       );
-      const json = await res.json() as Record<string, unknown>;
+      const json = await res.json().catch(() => {
+        if (res.ok) throw new Error('서버 응답을 읽지 못했습니다. 잠시 후 다시 시도해주세요.');
+        return {};
+      }) as Record<string, unknown>;
       if (id !== requestId.current) return;
-      if (!res.ok) throw new Error((json.detail as string) || '데이터 조회에 실패했습니다.');
-      setResolvedName(json.company_name as string);
-      setData(extractData(json));
-      setMessage(`'${json.company_name}' 데이터 조회 완료`);
+      if (!res.ok) {
+        const detail = typeof json.detail === 'string' ? json.detail : '';
+        throw new Error(detail || (res.status === 404
+          ? '해당 기업의 데이터를 찾지 못했습니다. 정식 회사명을 확인해주세요.'
+          : '데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.'));
+      }
+      const resolved = extractCompanyName?.(json) || (typeof json.company_name === 'string' ? json.company_name : name);
+      const result = extractData(json);
+      setResolvedName(resolved);
+      setData(result);
+      setMessage(`'${resolved}' 데이터 조회 완료`);
     } catch (e: unknown) {
       if (id !== requestId.current) return;
-      setMessage(`오류: ${e instanceof Error ? e.message : String(e)}`);
+      const reason = abort.signal.aborted
+        ? '조회 시간이 길어져 중단했습니다. 잠시 후 다시 시도해주세요.'
+        : e instanceof TypeError ? '서버에 연결하지 못했습니다. 연결 상태를 확인하고 다시 시도해주세요.'
+        : e instanceof Error ? e.message : '조회 중 문제가 발생했습니다. 다시 시도해주세요.';
+      setMessage(`오류: ${reason}`);
     } finally {
+      clearTimeout(timer);
       if (id === requestId.current) {
         inFlight.current = null;
         setLoading(false);
-        onSearched?.();
+        onSearchedRef.current?.();
       }
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyName, buildPath, extractData, timeout]);
+  }, [companyName]);
 
   useEffect(() => {
     // 부모가 검색 완료 후 initialCompany를 지워도 현재 결과는 유지합니다.
-    if (!initialCompany) return;
+    if (initialCompany === undefined) return;
     ++requestId.current;
+    controller.current?.abort();
     inFlight.current = null;
     setData(null); setMessage(''); setResolvedName(''); setLoading(false);
     setCompanyName(initialCompany);
-    if (autoFetch) fetchData(initialCompany);
+    if (autoFetch && initialCompany.trim()) fetchData(initialCompany);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialCompany, autoFetch]);
 
-  useEffect(() => () => { ++requestId.current; inFlight.current = null; }, []);
+  useEffect(() => () => { ++requestId.current; controller.current?.abort(); inFlight.current = null; }, []);
 
   return { data, loading, message, resolvedName, fetchData, companyName, setCompanyName };
 }
