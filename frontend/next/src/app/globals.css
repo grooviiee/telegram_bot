@@ -12,12 +12,14 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+:root { color-scheme: light; }
+
+:focus-visible { outline: 3px solid #2563eb; outline-offset: 3px; }
+.skip-link {
+  position: fixed; top: -100px; left: 16px; z-index: 50;
+  border-radius: 8px; background: white; padding: 12px 16px; color: #1d4ed8;
 }
+.skip-link:focus { top: 12px; }
 
 body {
   background: var(--background);

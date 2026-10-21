@@ -1,4 +1,5 @@
 ## Objective
+기존 웹의 검색·분석 이동·즐겨찾기·오류 복구 개선과 브라우저 검증은 [기존 분석 기능 UX](docs/existing-feature-ux.md)를 참고하세요.
 로컬 AI Telegram 사용법은 [로컬 AI 설정](docs/local-ai.md)을 참고하세요.
 사업부별 손익·비중 질문은 [사업부 손익 상담](docs/segment-profit.md)을 참고하세요.
 공시 전체에서 근거를 찾아 설명하는 기능은 [공시 검색 기반 상담](docs/report-retrieval.md)을 참고하세요.

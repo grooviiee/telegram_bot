@@ -1,62 +1,27 @@
 "use client";
 
-const NAV_ITEMS = [
-  { key: 'home',             label: '종합 분석' },
-  { key: 'business',         label: '사업 분석' },
-  { key: 'dividend',         label: '배당 분석' },
-  { key: 'profitability',    label: '수익성 & 성장성' },
-  { key: 'financial-health', label: '재무 건전성' },
-  { key: 'valuation',        label: '밸류에이션' },
-  { key: 'buffett',          label: '🧙 버핏 리포트' },
-  { key: 'report',           label: 'AI 리포트' },
-  { key: 'chat',             label: 'AI 상담' },
-  { key: 'events',           label: '📌 주가 이벤트' },
-];
+import { ANALYSIS_PAGES } from '@/lib/navigation';
 
 export function Header({ activePage, setActivePage, favoriteCount = 0 }) {
   return (
-    <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-      <div className="max-w-screen-xl mx-auto px-6 flex items-center gap-8 h-14">
-        {/* 로고 */}
-        <span className="font-bold text-blue-600 text-lg tracking-tight flex-shrink-0">
-          Butler.works
-        </span>
-
-        {/* 탭 네비게이션 */}
-        <nav className="flex items-stretch h-full gap-1 flex-1">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              onClick={() => setActivePage(item.key)}
-              className={`px-4 text-sm font-medium border-b-2 transition-colors ${
-                activePage === item.key
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-800 hover:border-gray-300'
-              }`}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* 즐겨찾기 버튼 */}
-        <button
-          onClick={() => setActivePage('favorites')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-            activePage === 'favorites'
-              ? 'bg-yellow-50 text-yellow-600 border border-yellow-300'
-              : 'text-gray-500 hover:text-yellow-600 hover:bg-yellow-50'
-          }`}
-        >
-          <span>{activePage === 'favorites' ? '★' : '☆'}</span>
-          <span>즐겨찾기</span>
-          {favoriteCount > 0 && (
-            <span className="bg-yellow-400 text-white text-xs font-bold rounded-full w-4 h-4 flex items-center justify-center">
-              {favoriteCount}
-            </span>
-          )}
+    <header className="sticky top-0 z-10 shrink-0 border-b border-gray-200 bg-white">
+      <div className="mx-auto flex max-w-screen-xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
+        <button onClick={() => setActivePage('home')} aria-label="Butler.works 종합 분석으로 이동"
+          className="text-lg font-bold tracking-tight text-blue-600">Butler.works</button>
+        <button onClick={() => setActivePage('favorites')} aria-current={activePage === 'favorites' ? 'page' : undefined}
+          className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium ${activePage === 'favorites' ? 'bg-yellow-50 text-yellow-700' : 'text-gray-600 hover:bg-yellow-50'}`}>
+          <span aria-hidden="true">☆ </span>즐겨찾기{favoriteCount > 0 ? ` ${favoriteCount}` : ''}
         </button>
       </div>
+      <nav aria-label="분석 메뉴" className="mx-auto flex max-w-screen-xl gap-1 overflow-x-auto px-4 sm:px-6">
+        {ANALYSIS_PAGES.map((item) => (
+          <button key={item.key} onClick={() => setActivePage(item.key)}
+            aria-current={activePage === item.key ? 'page' : undefined}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium transition-colors ${activePage === item.key ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-600 hover:border-gray-300 hover:text-gray-900'}`}>
+            {item.label}
+          </button>
+        ))}
+      </nav>
     </header>
   );
 }

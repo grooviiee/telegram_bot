@@ -2,82 +2,31 @@
 
 import { useEffect, useState } from 'react';
 
-interface Step {
-  label: string;
-  /** loading 시작 후 이 단계로 전환될 때까지의 ms */
-  after: number;
-}
-
 interface Props {
-  steps: Step[];
+  // 서버가 진행률을 제공하기 전에는 단계 완료를 추정하지 않습니다.
+  steps: { label: string; after: number }[];
   active: boolean;
 }
 
-export function ProgressIndicator({ steps, active }: Props) {
-  const [stepIdx, setStepIdx] = useState(0);
-  const [dots, setDots] = useState('');
-
+export function ProgressIndicator({ active }: Props) {
+  const [seconds, setSeconds] = useState(0);
   useEffect(() => {
-    if (!active) {
-      setStepIdx(0);
-      setDots('');
-      return;
-    }
-
-    // 점 애니메이션 (500ms 간격)
-    const dotsTimer = setInterval(() => {
-      setDots((prev) => (prev.length >= 3 ? '' : prev + '.'));
-    }, 500);
-
-    // 단계 전환 타이머
-    const stepTimers = steps.map((step, i) =>
-      setTimeout(() => setStepIdx(i), step.after)
-    );
-
-    return () => {
-      clearInterval(dotsTimer);
-      stepTimers.forEach(clearTimeout);
-    };
-  }, [active, steps]);
-
+    if (!active) { setSeconds(0); return; }
+    const started = Date.now();
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
   if (!active) return null;
-
-  const current = steps[stepIdx];
-  const progress = Math.round(((stepIdx + 1) / steps.length) * 100);
-
   return (
-    <div className="my-4 p-4 bg-blue-50 border border-blue-100 rounded-xl max-w-lg">
-      {/* 스피너 + 현재 단계 메시지 */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className="w-5 h-5 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-        <span className="text-sm font-medium text-blue-700">
-          {current.label}{dots}
-        </span>
+    <div className="my-4 max-w-2xl rounded-xl border border-blue-100 bg-blue-50 p-4">
+      <div role="status" className="flex items-center gap-3 text-sm font-medium text-blue-800">
+        <span aria-hidden="true" className="h-5 w-5 shrink-0 animate-spin rounded-full border-[3px] border-blue-500 border-t-transparent motion-reduce:animate-none" />
+        데이터를 불러오고 있습니다
       </div>
-
-      {/* 프로그레스 바 */}
-      <div className="h-1.5 bg-blue-100 rounded-full overflow-hidden mb-2">
-        <div
-          className="h-full bg-blue-500 rounded-full transition-all duration-700 ease-in-out"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {/* 단계 점 표시 */}
-      <div className="flex items-center gap-1.5">
-        {steps.map((step, i) => (
-          <div
-            key={i}
-            title={step.label}
-            className={`h-1.5 flex-1 rounded-full transition-all duration-500 ${
-              i <= stepIdx ? 'bg-blue-500' : 'bg-blue-100'
-            }`}
-          />
-        ))}
-        <span className="text-xs text-blue-400 ml-1 flex-shrink-0">
-          {stepIdx + 1}/{steps.length}
-        </span>
-      </div>
+      <p aria-hidden="true" className="mt-2 text-xs text-blue-700">{seconds}초 경과</p>
+      <p role="status" className="mt-2 text-xs leading-relaxed text-blue-800">
+        {seconds >= 15 ? '공시 조회나 AI 분석이 길어지고 있습니다. 처음 조회하는 기업은 수 분 걸릴 수 있어요.' : '공시 조회와 분석에 시간이 걸릴 수 있습니다. 잠시 기다려주세요.'}
+      </p>
     </div>
   );
 }
