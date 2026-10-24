@@ -12,7 +12,8 @@ import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 
 from config import (DART_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, AI_PROVIDER,
-                    TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE, TRENDING_RETRY_MINUTES, TRENDING_TIMEZONE)
+                    TRENDING_SEND_HOUR, TRENDING_SEND_MINUTE, TRENDING_RETRY_MINUTES, TRENDING_TIMEZONE,
+                    TIMING_CHECK_HOURS, TIMING_CHECK_MINUTE, TIMING_TIMEZONE)
 import database
 import bot as telegram_bot
 from services.cache_warmup import warm_popular_companies
@@ -75,6 +76,12 @@ async def lifespan(app: FastAPI):
             replace_existing=True,
         )
         scheduler.add_job(
+            telegram_bot.send_timing_alerts,
+            CronTrigger(day_of_week='mon-fri', hour=TIMING_CHECK_HOURS, minute=TIMING_CHECK_MINUTE,
+                        timezone=TIMING_TIMEZONE),
+            args=[bot_app.bot], id='timing_alerts', replace_existing=True, max_instances=1, coalesce=True,
+        )
+        scheduler.add_job(
             warm_popular_companies,
             CronTrigger(hour=5, minute=30),
             id="cache_warmup",
@@ -90,7 +97,7 @@ async def lifespan(app: FastAPI):
             args=[bot_app.bot], id="github_trending_retry", replace_existing=True,
         )
         scheduler.start()
-        print("[Scheduler] 일일 알림 (09:00 KST) + 공시 감지 (30분) + 인기 종목 캐시 워밍업 (05:30 KST) 등록 완료")
+        print("[Scheduler] 일일 알림 (09:00 KST) + 공시 감지 (30분) + 지금이니 (정규장 매시간) + 인기 종목 캐시 워밍업 (05:30 KST) 등록 완료")
     else:
         print("[Bot] TELEGRAM_BOT_TOKEN 미설정 — 봇 기능 비활성화")
 

@@ -186,6 +186,9 @@ TELEGRAM_COMMANDS = (
     ('fav_add', '즐겨찾기 추가 · 예: /fav_add 삼성전자 dividend'),
     ('fav_del', '즐겨찾기 삭제 · 예: /fav_del 삼성전자 dividend'),
     ('favs', '내 즐겨찾기 목록'),
+    ('timing', '지금이니! 등록 · 예: /timing 삼성전자 [목표가]'),
+    ('timing_list', '지금이니! 관심종목과 최근 확인 결과'),
+    ('timing_del', '지금이니! 해제 · 예: /timing_del 삼성전자'),
     ('today', '오늘의 GitHub 인기 프로젝트'),
     ('trend_on', '매일 오전 9시 GitHub 소개 신청'),
     ('trend_off', 'GitHub 정기 소개 해제'),
@@ -311,3 +314,30 @@ TRENDING_SYSTEM_INSTRUCTION = """
 인기 원인을 확인했다고 말하거나 검증되지 않은 성능을 단정하지 마세요.
 Markdown/HTML 없이 450자 이내로 작성하세요.
 """
+
+# --- 지금이니! 가격 조건 알림 ---
+TIMING_TIMEZONE = 'Asia/Seoul'
+TIMING_CHECK_HOURS = '9-15'
+TIMING_CHECK_MINUTE = 5
+TIMING_MARKET_OPEN = (9, 0)
+TIMING_MARKET_CLOSE = (15, 30)
+TIMING_QUOTE_PERIOD = '1d'
+TIMING_QUOTE_INTERVAL = '5m'
+TIMING_HISTORY_PERIOD = '6mo'
+TIMING_HISTORY_INTERVAL = '1d'
+TIMING_TICKER_SUFFIXES = ('.KS', '.KQ')
+TIMING_HTTP_TIMEOUT = 15
+TIMING_MAX_QUOTE_AGE_SECONDS = 20 * 60
+TIMING_CACHE_TTL_SECONDS = 60
+TIMING_RSI_PERIOD = 14
+TIMING_RSI_THRESHOLD = 30
+TIMING_MA_PERIOD = 20
+TIMING_MAX_WATCHES = 20
+TIMING_FETCH_CONCURRENCY = 4
+TIMING_STATUS_LABELS = {
+    'waiting': '첫 확인 대기', 'matched': '조건 충족',
+    'not_matched': '조건 미충족', 'stale': '최신 시세 대기',
+    'unavailable': '시세 조회 실패 · 다음 주기에 재시도',
+    'insufficient_data': '지표 계산 자료 부족',
+    'sent': '오늘 알림 발송 완료', 'delivery_failed': '발송 실패 · 다음 주기에 재시도',
+}

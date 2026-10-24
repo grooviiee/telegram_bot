@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from weakref import WeakValueDictionary
 from config import (CACHE_SCHEMA_VERSION, DATA_CACHE_TTL_SECONDS,
                     MARKET_CACHE_TTL_SECONDS, AI_CACHE_TTL_SECONDS, NEWS_CACHE_TTL_SECONDS,
-                    INSIDER_DOCUMENT_TTL, INSIDER_DOCUMENT_CACHE_BYTES)
+                    INSIDER_DOCUMENT_TTL, INSIDER_DOCUMENT_CACHE_BYTES, TIMING_CACHE_TTL_SECONDS)
 
 class DiskCache:
     def __init__(self, directory: str, max_size: int = 20, ttl: int = DATA_CACHE_TTL_SECONDS):
@@ -152,3 +152,5 @@ score_cache = DiskCache(os.path.join(_CACHE_DIR, "score"), ttl=MARKET_CACHE_TTL_
 # GitHub 수집/소개 결과는 날짜 키로 공유하여 구독자별 외부 호출을 줄입니다.
 github_trending_cache = DiskCache(os.path.join(_CACHE_DIR, "github_trending"), ttl=DATA_CACHE_TTL_SECONDS)
 github_summary_cache = DiskCache(os.path.join(_CACHE_DIR, "github_summary"), ttl=AI_CACHE_TTL_SECONDS)
+
+timing_cache = DiskCache(os.path.join(_CACHE_DIR, 'timing'), ttl=TIMING_CACHE_TTL_SECONDS)

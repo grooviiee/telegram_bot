@@ -12,6 +12,7 @@ import asyncio
 import html
 import logging
 import aiohttp
+from fastapi import HTTPException
 from telegram import Update, Bot, BotCommand, MenuButtonCommands, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -23,9 +24,11 @@ from telegram.error import Forbidden
 import database
 from config import (TELEGRAM_BOT_TOKEN, TELEGRAM_COMMANDS, TRENDING_SEND_HOUR,
                     TRENDING_SEND_MINUTE, INSIDER_REQUEST_TIMEOUT,
-                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS, CHANGES_HTTP_TIMEOUT, TELEGRAM_MSG_LIMIT, AI_PROVIDER)
+                    AI_HTTP_TIMEOUT, AI_MAX_QUESTION_CHARS, CHANGES_HTTP_TIMEOUT, TELEGRAM_MSG_LIMIT, AI_PROVIDER,
+                    TIMING_CHECK_MINUTE, TIMING_STATUS_LABELS)
 from services.changes import format_change_blocks
-from services import github_trending
+from services import github_trending, timing
+from services.dart import get_company_info
 from utils import fmt_krw
 from services.profit_chart import render_profit_chart
 from services.insider_chart import render_insider_chart
@@ -458,6 +461,11 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         "🔥 /today — 오늘의 프로젝트 최대 3개\n"
         "🔔 /trend_on — 매일 09:00 KST 소개 신청 (개인 채팅)\n"
         "🔕 /trend_off — 소개 알림 해제\n\n"
+        "<b>── 지금이니! 매수 검토 알림 (개인 채팅) ──</b>\n"
+        "🔔 /timing [회사명] [목표가 생략 가능]\n"
+        "📋 /timing_list — 관심종목·최근 확인 결과\n"
+        "🔕 /timing_del [회사명 또는 종목코드] — 해제\n"
+        f"정규장 매시 {TIMING_CHECK_MINUTE:02d}분 확인 · 종목당 하루 1회 알림\n\n"
         "<b>── 즐겨찾기 ──</b>\n"
         "⭐ /fav_add [회사명] [dividend|profit|health]\n"
         "🗑 /fav_del [회사명] [dividend|profit|health]\n"
@@ -928,6 +936,114 @@ async def cmd_chat_end(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
 # 즐겨찾기 커맨드
 # -------------------------------------------------------------------
 
+async def _timing_private_chat(update: Update) -> bool:
+    if update.effective_chat.type == 'private':
+        return True
+    await update.effective_message.reply_text('지금이니! 알림은 봇과의 개인 채팅에서 설정해주세요.')
+    return False
+
+
+async def cmd_timing(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """개인 채팅의 관심종목을 자동 조건 또는 목표가 조건으로 등록합니다."""
+    if not await _timing_private_chat(update):
+        return
+    try:
+        company, target = timing.parse_registration(ctx.args)
+        info = await asyncio.to_thread(get_company_info, company)
+        if not info.get('stock_code'):
+            raise ValueError('국내 상장 주식의 회사명 또는 6자리 종목코드를 입력해주세요.')
+        await database.save_timing_watch(update.effective_chat.id, info['company_name'], info['stock_code'], target)
+    except (ValueError, HTTPException) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        await update.effective_message.reply_text(_e(detail), parse_mode=ParseMode.HTML)
+        return
+    except Exception as exc:
+        logging.getLogger(__name__).warning('지금이니 등록 실패 (%s)', type(exc).__name__)
+        await update.effective_message.reply_text('관심종목을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.')
+        return
+    await update.effective_message.reply_text(
+        f"🔔 <b>지금이니! {_e(info['company_name'])} ({_e(info['stock_code'])})</b> 등록 완료\n"
+        f"조건: {timing.describe_condition(target)}\n"
+        f"정규장 매시 {TIMING_CHECK_MINUTE:02d}분 확인 · 종목당 하루 1회 알림\n"
+        '시세가 지연되거나 당일 거래가 없으면 알림을 건너뜁니다.\n'
+        '등록 조건에 따른 매수 검토 알림이며 수익이나 반등을 보장하지 않습니다.\n'
+        f"목록: /timing_list · 해제: /timing_del {_e(info['stock_code'])}", parse_mode=ParseMode.HTML)
+
+
+async def cmd_timing_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """현재 개인 채팅의 관심종목 조건과 마지막 가격 확인 결과를 보여줍니다."""
+    if not await _timing_private_chat(update):
+        return
+    watches = await database.get_timing_watches(update.effective_chat.id)
+    if not watches:
+        await update.effective_message.reply_text('등록된 관심종목이 없습니다. /timing 삼성전자로 시작하세요.')
+        return
+    lines = ['📋 <b>지금이니! 내 관심종목</b>',
+             f'정규장 매시 {TIMING_CHECK_MINUTE:02d}분 확인 · 종목당 하루 1회 알림']
+    for watch in watches:
+        lines.extend(['', f"<b>{_e(watch['company'])} ({_e(watch['stock_code'])})</b>",
+                      timing.describe_condition(watch['target_price']),
+                      _e(TIMING_STATUS_LABELS.get(watch['last_status'], watch['last_status']))])
+        if watch['last_price'] is not None:
+            lines.append(f"5분봉 종가: {fmt_krw(watch['last_price'])} · 시세: {_e(watch['last_quote_at'])}")
+        if watch['last_checked_at']:
+            lines.append(f"마지막 확인: {_e(watch['last_checked_at'])}")
+        if watch['last_alert_day']:
+            lines.append(f"최근 알림: {_e(watch['last_alert_day'])} KST")
+    lines.append('\n변경: /timing [종목코드] [목표가 또는 auto] · 해제: /timing_del [종목코드]')
+    await _send_long(update, '\n'.join(lines))
+
+
+async def cmd_timing_del(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """외부 시세 서비스 장애와 무관하게 개인 관심종목 알림을 해제합니다."""
+    if not await _timing_private_chat(update):
+        return
+    company = ' '.join(ctx.args).strip()
+    if not company:
+        await update.effective_message.reply_text('사용법: /timing_del [등록된 회사명 또는 종목코드]')
+        return
+    removed = await database.remove_timing_watch(update.effective_chat.id, company)
+    await update.effective_message.reply_text(
+        '지금이니! 알림을 해제했습니다.' if removed else '등록된 종목이 없습니다. /timing_list에서 회사명·종목코드를 확인해주세요.')
+
+
+async def send_timing_alerts(bot: Bot) -> None:
+    """최신 가격이 조건을 충족하면 알리고 성공한 종목의 당일 재발송을 막습니다."""
+    async with timing.notification_lock:
+        if not timing.is_market_hours(timing.now_kst()):
+            return
+        watches = await database.get_timing_watches()
+        snapshots = await timing.collect_snapshots(watches)
+        for watch in watches:
+            try:
+                now = timing.now_kst()  # 수집에 시간이 걸려도 발송 직전에 시세 신선도를 다시 확인합니다.
+                if not timing.is_market_hours(now):
+                    return
+                snapshot = snapshots[watch['stock_code']]
+                status = timing.evaluate_watch(watch, snapshot, now)
+                fresh = snapshot is not None and timing.is_fresh_quote(snapshot, now)
+                price = snapshot['price'] if fresh else None
+                quote_at = snapshot['quote_at'] if fresh else None
+                day = now.date().isoformat()
+                if status == 'matched' and watch['last_alert_day'] == day:
+                    status = 'sent'
+                active = await database.record_timing_check(watch, now.isoformat(), price, status, quote_at=quote_at)
+                if not active or status != 'matched':
+                    continue
+                try:
+                    await bot.send_message(chat_id=watch['chat_id'], text=timing.build_alert_message(watch, snapshot),
+                                           parse_mode=ParseMode.HTML)
+                except Forbidden:
+                    await database.remove_timing_watch(watch['chat_id'], watch['stock_code'])
+                except Exception as exc:
+                    await database.record_timing_check(watch, now.isoformat(), price, 'delivery_failed', quote_at=quote_at)
+                    logging.getLogger(__name__).warning('지금이니 발송 실패 (%s)', type(exc).__name__)
+                else:
+                    await database.mark_timing_delivered(watch, day)
+            except Exception as exc:
+                logging.getLogger(__name__).warning('지금이니 확인 실패 (%s)', type(exc).__name__)
+
+
 async def cmd_add_favorite(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if len(ctx.args) < 2 or ctx.args[-1] not in ANALYSIS_TYPE_MAP:
         await update.message.reply_text(
@@ -1188,6 +1304,9 @@ def create_bot_application() -> Application:
     app.add_handler(CommandHandler("today", cmd_today))
     app.add_handler(CommandHandler("trend_on", cmd_trend_on))
     app.add_handler(CommandHandler("trend_off", cmd_trend_off))
+    app.add_handler(CommandHandler("timing", cmd_timing))
+    app.add_handler(CommandHandler("timing_list", cmd_timing_list))
+    app.add_handler(CommandHandler("timing_del", cmd_timing_del))
 
     # 기업 분석
     app.add_handler(CommandHandler("start",     cmd_start))

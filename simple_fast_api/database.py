@@ -5,7 +5,7 @@ SQLite 기반 사용자 즐겨찾기 저장소.
 
 import aiosqlite
 import json
-from config import DB_PATH
+from config import DB_PATH, TIMING_MAX_WATCHES
 
 
 async def init_db() -> None:
@@ -38,6 +38,20 @@ async def init_db() -> None:
             )
         """)
         await db.executescript("""
+            CREATE TABLE IF NOT EXISTS timing_watches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                company TEXT NOT NULL,
+                stock_code TEXT NOT NULL,
+                target_price REAL CHECK(target_price > 0),
+                revision INTEGER NOT NULL DEFAULT 1,
+                last_alert_day TEXT,
+                last_checked_at TEXT,
+                last_quote_at TEXT,
+                last_price REAL,
+                last_status TEXT NOT NULL DEFAULT 'waiting',
+                UNIQUE(chat_id, stock_code)
+            );
             CREATE TABLE IF NOT EXISTS trending_subscriptions (
                 chat_id INTEGER PRIMARY KEY
             );
@@ -234,4 +248,71 @@ async def mark_trending_delivered(chat_id: int, day: str, names: list[str]) -> N
         await db.execute("INSERT OR IGNORE INTO trending_deliveries VALUES (?,?)", (chat_id, day))
         await db.executemany("INSERT OR REPLACE INTO trending_seen VALUES (?,?,?)",
                              [(chat_id, name, day) for name in names])
+        await db.commit()
+
+
+async def save_timing_watch(chat_id: int, company: str, stock_code: str,
+                            target_price: float | None) -> None:
+    """관심종목 조건을 저장하고 동일 종목의 당일 발송 기록을 유지합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute('BEGIN IMMEDIATE')
+        cursor = await db.execute('SELECT stock_code FROM timing_watches WHERE chat_id=?', (chat_id,))
+        codes = {row[0] for row in await cursor.fetchall()}
+        if stock_code not in codes and len(codes) >= TIMING_MAX_WATCHES:
+            raise ValueError(f'관심종목은 최대 {TIMING_MAX_WATCHES}개까지 등록할 수 있습니다.')
+        await db.execute("""
+            INSERT INTO timing_watches (chat_id, company, stock_code, target_price)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(chat_id, stock_code) DO UPDATE SET
+                company=excluded.company, target_price=excluded.target_price,
+                revision=timing_watches.revision+1, last_checked_at=NULL, last_quote_at=NULL,
+                last_price=NULL, last_status='waiting'
+            WHERE timing_watches.target_price IS NOT excluded.target_price
+                OR timing_watches.company != excluded.company
+        """, (chat_id, company, stock_code, target_price))
+        await db.commit()
+
+
+async def get_timing_watches(chat_id: int | None = None) -> list[dict]:
+    """개인 채팅 또는 전체의 가격 알림 설정과 마지막 확인 결과를 반환합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        query = 'SELECT * FROM timing_watches'
+        args = () if chat_id is None else (chat_id,)
+        if chat_id is not None:
+            query += ' WHERE chat_id=?'
+        cursor = await db.execute(query + ' ORDER BY id', args)
+        return [dict(row) for row in await cursor.fetchall()]
+
+
+async def remove_timing_watch(chat_id: int, company_or_code: str) -> bool:
+    """외부 API 조회 없이 해당 채팅 소유의 관심종목 알림만 해제합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            'DELETE FROM timing_watches WHERE chat_id=? AND (company=? OR stock_code=?)',
+            (chat_id, company_or_code, company_or_code))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def record_timing_check(watch: dict, checked_at: str, price: float | None,
+                              status: str, quote_at: str | None = None) -> bool:
+    """등록 버전이 같은 경우에만 해당 조건의 가격 확인 결과를 저장합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute("""
+            UPDATE timing_watches SET last_checked_at=?, last_price=?, last_status=?, last_quote_at=?
+            WHERE id=? AND revision=?
+        """, (checked_at, price, status, quote_at, watch['id'], watch['revision']))
+        await db.commit()
+        return cursor.rowcount > 0
+
+
+async def mark_timing_delivered(watch: dict, day: str) -> None:
+    """전송 중 조건이 바뀌어도 같은 구독의 당일 성공 기록을 유지합니다."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            UPDATE timing_watches SET last_alert_day=?,
+                last_status=CASE WHEN revision=? THEN 'sent' ELSE last_status END
+            WHERE id=?
+        """, (day, watch['revision'], watch['id']))
         await db.commit()
